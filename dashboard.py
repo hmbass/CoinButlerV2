@@ -84,27 +84,10 @@ def get_status_color(status):
     }
     return colors.get(status, '#666666')
 
-def get_real_bot_status():
-    """실제 봇 상태를 파일 시스템에서 확인"""
+def get_system_status():
+    """시스템 상태 정보 조회 (봇 상태 확인 제거)"""
     try:
-        import subprocess
         import json
-        
-        # PID 파일들 확인
-        bot_pid_file = "pids/coinbutler_bot.pid"
-        dashboard_pid_file = "pids/coinbutler_dashboard.pid"
-        
-        bot_running = False
-        if os.path.exists(bot_pid_file):
-            try:
-                with open(bot_pid_file, 'r') as f:
-                    pid = int(f.read().strip())
-                # 프로세스가 실제로 실행 중인지 확인 (Unix 시스템용)
-                result = subprocess.run(['kill', '-0', str(pid)], 
-                                      capture_output=True, text=True)
-                bot_running = result.returncode == 0
-            except:
-                bot_running = False
         
         # 일일 손익 정보
         daily_pnl = 0
@@ -193,8 +176,6 @@ def get_real_bot_status():
             krw_balance = 0
         
         return {
-            'is_running': bot_running,
-            'is_paused': False,  # 로그에서 파악해야 하지만 일단 False
             'krw_balance': krw_balance,
             'daily_pnl': daily_pnl,
             'trading_stats': trading_stats,
@@ -206,10 +187,8 @@ def get_real_bot_status():
             }
         }
     except Exception as e:
-        st.error(f"봇 상태 조회 오류: {e}")
+        st.error(f"시스템 상태 조회 오류: {e}")
         return {
-            'is_running': False,
-            'is_paused': False,
             'krw_balance': 0,
             'daily_pnl': 0,
             'trading_stats': {'total_trades': 0, 'win_rate': 0, 'total_pnl': 0},
@@ -232,19 +211,8 @@ def main():
     with st.sidebar:
         st.header("📊 시스템 정보")
         
-        bot_status = get_real_bot_status()
-        
-        # 봇 상태 표시
-        if bot_status['is_running']:
-            if bot_status['is_paused']:
-                st.markdown('🟡 **일시정지 중**')
-            else:
-                st.markdown('🟢 **정상 실행 중**')
-        else:
-            st.markdown('🔴 **중지됨**')
-        
-        # 마지막 업데이트 시간
-        st.caption(f"마지막 업데이트: {datetime.now().strftime('%H:%M:%S')}")
+        # 마지막 업데이트 시간만 표시
+        st.caption(f"업데이트: {datetime.now().strftime('%H:%M:%S')}")
         
         st.markdown("---")
         
@@ -275,17 +243,17 @@ def main():
             
         st.markdown("---")
         
-        # 시스템 안내
-        st.subheader("💡 시스템 제어")
+        # 간단한 안내
+        st.subheader("💡 안내")
         st.info("""
-        봇 제어는 **SSH 터미널**에서:
-        - `./start.sh` - 봇 시작  
-        - `./status.sh` - 상태 확인
-        - `./stop.sh` - 봇 중지
+        **실시간 모니터링 대시보드**
+        - 자동 새로고침으로 실시간 업데이트
+        - 보유 종목 상태 및 손익 확인
+        - 거래 내역 및 통계 제공
         """)
     
     # 메인 컨텐츠
-    bot_status = get_real_bot_status()
+    system_status = get_system_status()
     risk_manager = get_risk_manager()
     
     # 상단 메트릭
@@ -294,12 +262,12 @@ def main():
     with col1:
         st.metric(
             label="💰 KRW 잔고",
-            value=format_currency(bot_status['krw_balance']),
+            value=format_currency(system_status['krw_balance']),
             delta=None
         )
     
     with col2:
-        daily_pnl = bot_status['daily_pnl']
+        daily_pnl = system_status['daily_pnl']
         pnl_color = "normal" if daily_pnl >= 0 else "inverse"
         st.metric(
             label="📊 일일 손익",
@@ -309,7 +277,7 @@ def main():
         )
     
     with col3:
-        positions_info = bot_status['positions']
+        positions_info = system_status['positions']
         st.metric(
             label="📋 보유 포지션",
             value=f"{positions_info['total_positions']}/{positions_info['max_positions']}",
@@ -317,7 +285,7 @@ def main():
         )
     
     with col4:
-        trading_stats = bot_status['trading_stats']
+        trading_stats = system_status['trading_stats']
         st.metric(
             label="🎯 승률",
             value=f"{trading_stats['win_rate']:.1f}%",
@@ -325,13 +293,13 @@ def main():
         )
     
     # 탭 생성
-    tab1, tab2, tab3 = st.tabs(["📊 현재 현황", "💼 보유 종목", "📈 거래 내역"])
+    tab1, tab2, tab3 = st.tabs(["📊 대시보드", "💼 보유 종목", "📈 거래 내역"])
     
     with tab1:
-        show_realtime_status(bot_status, risk_manager)
+        show_realtime_status(system_status, risk_manager)
     
     with tab2:
-        show_positions(bot_status, risk_manager)
+        show_positions(system_status, risk_manager)
     
     with tab3:
         show_trading_history()
@@ -341,12 +309,12 @@ def main():
         time.sleep(5)
         st.rerun()
 
-def show_realtime_status(bot_status, risk_manager):
+def show_realtime_status(system_status, risk_manager):
     """실시간 현황 탭"""
     st.subheader("📊 실시간 거래 현황")
     
     # 현재 포지션 요약
-    positions_info = bot_status['positions']
+    positions_info = system_status['positions']
     positions_data = positions_info['positions']
     
     # 포지션 요약 계산
@@ -379,7 +347,7 @@ def show_realtime_status(bot_status, risk_manager):
                 delta_color=pnl_color
             )
         with col4:
-            available_balance = bot_status['krw_balance']
+            available_balance = system_status['krw_balance']
             st.metric("사용 가능 잔고", format_currency(available_balance))
     
     st.markdown("---")
@@ -406,7 +374,7 @@ def show_realtime_status(bot_status, risk_manager):
     
     with col2:
         st.subheader("📈 거래 성과")
-        stats = bot_status['trading_stats']
+        stats = system_status['trading_stats']
         
         # 거래 통계 메트릭
         col2_1, col2_2 = st.columns(2)
@@ -420,7 +388,7 @@ def show_realtime_status(bot_status, risk_manager):
             st.metric("평균 손익", format_currency(stats.get('avg_profit', 0)))
         
         # 일일 손익 표시
-        daily_pnl = bot_status['daily_pnl']
+        daily_pnl = system_status['daily_pnl']
         pnl_color = "normal" if daily_pnl >= 0 else "inverse"
         st.metric(
             "오늘 실현 손익",
@@ -428,25 +396,19 @@ def show_realtime_status(bot_status, risk_manager):
             delta_color=pnl_color
         )
     
-    # 시스템 상태 정보
+    # 포지션 상태 정보 (봇 상태 표시 제거)
     st.markdown("---")
-    st.subheader("🔧 시스템 상태")
+    st.subheader("📊 투자 현황")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
-        bot_status_text = "🟢 실행중" if bot_status['is_running'] else "🔴 중지됨"
-        if bot_status['is_paused']:
-            bot_status_text = "🟡 일시정지"
-        st.info(f"**봇 상태:** {bot_status_text}")
-    
-    with col2:
         position_status = f"{positions_info['total_positions']}/{positions_info['max_positions']}"
         st.info(f"**보유 포지션:** {position_status}")
     
-    with col3:
+    with col2:
         investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 100000))
-        can_trade = "가능" if bot_status['krw_balance'] >= investment_amount else "불가능"
+        can_trade = "가능" if system_status['krw_balance'] >= investment_amount else "불가능"
         st.info(f"**신규 매수:** {can_trade}")
     
     # 최근 활동 (거래 내역에서 최근 5건)
@@ -476,27 +438,137 @@ def show_realtime_status(bot_status, risk_manager):
     except Exception as e:
         st.error(f"최근 거래 조회 오류: {e}")
 
-def show_positions(bot_status, risk_manager):
-    """포지션 관리 탭"""
-    st.subheader("💼 현재 포지션")
+def show_positions(system_status, risk_manager):
+    """보유 종목 상세 정보 탭"""
+    st.subheader("💼 보유 종목 현황")
     
-    positions = bot_status['positions']['positions']
+    positions = system_status['positions']['positions']
     
     if not positions:
-        st.info("현재 보유 중인 포지션이 없습니다.")
+        st.info("🔍 현재 보유 중인 종목이 없습니다.")
+        st.write("새로운 거래 기회를 기다리고 있습니다.")
         return
     
-    # 포지션 테이블
-    position_data = []
+    # 전체 포지션 요약 (상단)
     total_investment = 0
     total_current_value = 0
+    total_pnl = 0
     
     for market, pos_info in positions.items():
-        # 이미 get_real_bot_status()에서 현재가와 손익을 계산했음
-        if pos_info['current_price'] > 0:  # API 호출이 성공한 경우
+        if pos_info['current_price'] > 0:
             total_investment += pos_info['investment_amount']
             total_current_value += pos_info['current_value']
+            total_pnl += pos_info['pnl']
+    
+    if total_investment > 0:
+        total_pnl_rate = (total_pnl / total_investment) * 100
+        
+        st.subheader("📊 전체 포지션 요약")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("총 투자금액", format_currency(total_investment))
+        with col2:
+            st.metric("현재 가치", format_currency(total_current_value))
+        with col3:
+            pnl_color = "normal" if total_pnl >= 0 else "inverse"
+            st.metric(
+                "미실현 손익", 
+                format_currency(total_pnl),
+                delta_color=pnl_color
+            )
+        with col4:
+            st.metric("수익률", f"{total_pnl_rate:+.2f}%")
+    
+    st.markdown("---")
+    
+    # 개별 종목 상세 정보
+    st.subheader("📈 개별 종목 상세")
+    
+    for i, (market, pos_info) in enumerate(positions.items()):
+        coin_name = market.replace('KRW-', '')
+        
+        # 각 종목별 컨테이너
+        with st.container():
+            # 종목 헤더
+            col_header1, col_header2 = st.columns([3, 1])
             
+            with col_header1:
+                if pos_info['current_price'] > 0 and pos_info['pnl'] >= 0:
+                    st.markdown(f"### 🟢 **{coin_name}** ({market})")
+                elif pos_info['current_price'] > 0 and pos_info['pnl'] < 0:
+                    st.markdown(f"### 🔴 **{coin_name}** ({market})")
+                else:
+                    st.markdown(f"### ⚪ **{coin_name}** ({market})")
+            
+            with col_header2:
+                if pos_info['current_price'] > 0:
+                    pnl_rate = pos_info['pnl_rate']
+                    if pnl_rate >= 0:
+                        st.markdown(f"**<span style='color:#00d4aa'>+{pnl_rate:.2f}%</span>**", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**<span style='color:#ff4b4b'>{pnl_rate:.2f}%</span>**", unsafe_allow_html=True)
+            
+            # 종목 상세 정보
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.write("**진입 정보**")
+                st.write(f"🎯 진입가: **{pos_info['entry_price']:,.0f}원**")
+                st.write(f"📊 수량: **{pos_info['quantity']:.6f}**")
+                entry_time = pos_info.get('entry_time', '')
+                if entry_time:
+                    formatted_time = pd.to_datetime(entry_time).strftime('%m-%d %H:%M') if entry_time else "알 수 없음"
+                    st.write(f"⏰ 진입: **{formatted_time}**")
+            
+            with col2:
+                st.write("**현재 정보**")
+                if pos_info['current_price'] > 0:
+                    st.write(f"💰 현재가: **{pos_info['current_price']:,.0f}원**")
+                    price_diff = pos_info['current_price'] - pos_info['entry_price']
+                    price_diff_rate = (price_diff / pos_info['entry_price']) * 100
+                    if price_diff >= 0:
+                        st.write(f"📈 가격변동: **+{price_diff:,.0f}원 (+{price_diff_rate:.2f}%)**")
+                    else:
+                        st.write(f"📉 가격변동: **{price_diff:,.0f}원 ({price_diff_rate:.2f}%)**")
+                else:
+                    st.write("💰 현재가: **조회 실패**")
+                    st.write("📈 가격변동: **-**")
+            
+            with col3:
+                st.write("**투자 현황**")
+                st.write(f"💵 투자금액: **{pos_info['investment_amount']:,.0f}원**")
+                if pos_info['current_price'] > 0:
+                    st.write(f"💎 현재가치: **{pos_info['current_value']:,.0f}원**")
+                else:
+                    st.write("💎 현재가치: **조회 실패**")
+            
+            with col4:
+                st.write("**손익 현황**")
+                if pos_info['current_price'] > 0:
+                    if pos_info['pnl'] >= 0:
+                        st.write(f"💹 손익: **<span style='color:#00d4aa'>+{pos_info['pnl']:,.0f}원</span>**", unsafe_allow_html=True)
+                    else:
+                        st.write(f"💹 손익: **<span style='color:#ff4b4b'>{pos_info['pnl']:,.0f}원</span>**", unsafe_allow_html=True)
+                    
+                    # 목표가/손절가 표시 (설정값 기반)
+                    profit_rate = float(os.getenv('PROFIT_RATE', 0.03))
+                    loss_rate = float(os.getenv('LOSS_RATE', -0.02))
+                    profit_target = pos_info['entry_price'] * (1 + profit_rate)
+                    loss_target = pos_info['entry_price'] * (1 + loss_rate)
+                    st.write(f"🎯 목표가: **{profit_target:,.0f}원** ({profit_rate*100:+.1f}%)")
+                    st.write(f"⛔ 손절가: **{loss_target:,.0f}원** ({loss_rate*100:+.1f}%)")
+                else:
+                    st.write("💹 손익: **조회 실패**")
+            
+            st.markdown("---")
+    
+    # 하단 표 형태로도 제공
+    st.subheader("📋 포지션 요약표")
+    
+    position_data = []
+    for market, pos_info in positions.items():
+        if pos_info['current_price'] > 0:
             position_data.append({
                 '종목': market.replace('KRW-', ''),
                 '진입가': f"{pos_info['entry_price']:,.0f}원",
@@ -505,10 +577,9 @@ def show_positions(bot_status, risk_manager):
                 '투자금액': f"{pos_info['investment_amount']:,.0f}원",
                 '현재가치': f"{pos_info['current_value']:,.0f}원",
                 '손익': f"{pos_info['pnl']:,.0f}원",
-                '손익률': f"{pos_info['pnl_rate']:+.2f}%",
-                '진입시간': pos_info['entry_time'][:16] if pos_info['entry_time'] else "알 수 없음"
+                '손익률': f"{pos_info['pnl_rate']:+.2f}%"
             })
-        else:  # API 호출 실패한 경우
+        else:
             position_data.append({
                 '종목': market.replace('KRW-', ''),
                 '진입가': f"{pos_info['entry_price']:,.0f}원",
@@ -517,32 +588,12 @@ def show_positions(bot_status, risk_manager):
                 '투자금액': f"{pos_info['investment_amount']:,.0f}원",
                 '현재가치': "조회 실패",
                 '손익': "조회 실패",
-                '손익률': "조회 실패",
-                '진입시간': pos_info['entry_time'][:16] if pos_info['entry_time'] else "알 수 없음"
+                '손익률': "조회 실패"
             })
     
     if position_data:
         df = pd.DataFrame(position_data)
         st.dataframe(df, use_container_width=True)
-        
-        # 포지션 요약
-        if total_investment > 0:
-            total_pnl = total_current_value - total_investment
-            total_pnl_rate = (total_pnl / total_investment) * 100
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("총 투자금액", format_currency(total_investment))
-            with col2:
-                st.metric("현재 가치", format_currency(total_current_value))
-            with col3:
-                pnl_color = "normal" if total_pnl >= 0 else "inverse"
-                st.metric(
-                    "미실현 손익", 
-                    format_currency(total_pnl),
-                    format_percentage(total_pnl_rate),
-                    delta_color=pnl_color
-                )
 
 def show_trading_history():
     """거래 내역 탭"""
