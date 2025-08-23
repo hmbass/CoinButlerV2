@@ -168,6 +168,7 @@ class CoinButler:
         self.is_running = False
         self.is_paused = False
         self.last_market_scan = datetime.now() - timedelta(minutes=10)
+        self.last_balance_check = datetime.now() - timedelta(minutes=30)
         
         # 텔레그램 알림 초기화
         init_notifier()
@@ -188,12 +189,11 @@ class CoinButler:
         logger.info(f"현재 KRW 잔고: {krw_balance:,.0f}원")
         
         if krw_balance < self.investment_amount:
-            error_msg = f"잔고 부족! 현재: {krw_balance:,.0f}원, 필요: {self.investment_amount:,.0f}원"
-            logger.error(error_msg)
-            self.stop()
-            return
+            warning_msg = f"⚠️ 잔고 부족! 현재: {krw_balance:,.0f}원, 필요: {self.investment_amount:,.0f}원"
+            logger.warning(warning_msg)
+            logger.info("잔고가 부족하지만 봇은 계속 실행됩니다. 매수는 잔고가 충분할 때만 실행됩니다.")
         
-        # 메인 루프 시작
+        # 메인 루프 시작 (잔고 부족 시에도 실행)
         self._main_loop()
     
     def stop(self):
@@ -228,6 +228,11 @@ class CoinButler:
                 
                 # 기존 포지션 관리 (매도 조건 체크)
                 self._manage_positions()
+                
+                # 잔고 상태 주기적 체크 (30분마다)
+                if datetime.now() - self.last_balance_check > timedelta(minutes=30):
+                    self._check_balance_status()
+                    self.last_balance_check = datetime.now()
                 
                 # 새로운 매수 기회 탐색 (10분마다로 주기 확장)
                 if datetime.now() - self.last_market_scan > timedelta(minutes=10):
@@ -269,6 +274,21 @@ class CoinButler:
                         
             except Exception as e:
                 logger.error(f"포지션 관리 오류 ({market}): {e}")
+    
+    def _check_balance_status(self):
+        """잔고 상태 체크 및 정보 제공"""
+        try:
+            krw_balance = self.upbit_api.get_krw_balance()
+            
+            if krw_balance >= self.investment_amount:
+                logger.info(f"💰 잔고 상태: 양호 ({krw_balance:,.0f}원 / {self.investment_amount:,.0f}원 필요)")
+            else:
+                shortage = self.investment_amount - krw_balance
+                logger.warning(f"💰 잔고 부족: {krw_balance:,.0f}원 (부족: {shortage:,.0f}원)")
+                logger.info(f"💡 매수를 위해 {shortage:,.0f}원을 입금해주세요.")
+                
+        except Exception as e:
+            logger.error(f"잔고 상태 체크 오류: {e}")
     
     def _scan_for_opportunities(self):
         """새로운 매수 기회 탐색"""
@@ -377,7 +397,8 @@ class CoinButler:
             # 현재 잔고 확인
             krw_balance = self.upbit_api.get_krw_balance()
             if krw_balance < self.investment_amount:
-                logger.warning(f"잔고 부족으로 매수 스킵: {market}")
+                logger.warning(f"💰 잔고 부족으로 매수 스킵: {market} (현재: {krw_balance:,.0f}원, 필요: {self.investment_amount:,.0f}원)")
+                logger.info(f"💡 {self.investment_amount - krw_balance:,.0f}원 더 필요합니다.")
                 return
             
             # 매수 주문 실행
