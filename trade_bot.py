@@ -36,12 +36,20 @@ class AIAnalyzer:
         if api_key:
             try:
                 genai.configure(api_key=api_key)
-                self.model = genai.GenerativeModel('gemini-pro')
+                # 최신 모델명으로 변경: gemini-pro → gemini-1.5-flash
+                self.model = genai.GenerativeModel('gemini-1.5-flash')
                 self.enabled = True
-                logger.info("Gemini AI 모델이 성공적으로 초기화되었습니다.")
+                logger.info("Gemini AI 모델(gemini-1.5-flash)이 성공적으로 초기화되었습니다.")
             except Exception as e:
                 logger.error(f"Gemini AI 초기화 실패: {e}")
-                self.enabled = False
+                # 대체 모델 시도
+                try:
+                    self.model = genai.GenerativeModel('gemini-1.5-pro')
+                    self.enabled = True
+                    logger.info("대체 모델(gemini-1.5-pro)로 초기화 완료")
+                except:
+                    logger.error("모든 Gemini 모델 초기화 실패")
+                    self.enabled = False
         else:
             self.enabled = False
         
