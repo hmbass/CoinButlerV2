@@ -67,9 +67,13 @@ class RiskManager:
         self.positions: Dict[str, Position] = {}  # 현재 보유 포지션
         self.trade_history_file = "trade_history.csv"
         self.daily_pnl_file = "daily_pnl.json"
+        self.positions_file = "positions.json"  # 포지션 상태 저장 파일
         
-        # CSV 파일 초기화
+        # 파일 초기화
         self._initialize_trade_history()
+        
+        # 기존 포지션 복원 시도
+        self._restore_positions_from_file()
         
     def _initialize_trade_history(self):
         """거래 이력 CSV 파일 초기화"""
@@ -81,6 +85,133 @@ class RiskManager:
             with open(self.trade_history_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(headers)
+    
+    def _save_positions_to_file(self):
+        """현재 포지션 상태를 파일에 저장"""
+        try:
+            positions_data = {}
+            for market, position in self.positions.items():
+                if position.status == "open":  # 열린 포지션만 저장
+                    positions_data[market] = position.to_dict()
+            
+            with open(self.positions_file, 'w', encoding='utf-8') as f:
+                json.dump(positions_data, f, ensure_ascii=False, indent=2)
+                
+        except Exception as e:
+            logger.error(f"포지션 파일 저장 실패: {e}")
+    
+    def _restore_positions_from_file(self):
+        """파일에서 포지션 상태 복원"""
+        try:
+            if not os.path.exists(self.positions_file):
+                logger.info("포지션 파일이 없습니다. 새로 시작합니다.")
+                return
+            
+            with open(self.positions_file, 'r', encoding='utf-8') as f:
+                positions_data = json.load(f)
+            
+            for market, pos_data in positions_data.items():
+                if pos_data.get('status') == 'open':
+                    position = Position(
+                        market=pos_data['market'],
+                        entry_price=pos_data['entry_price'],
+                        quantity=pos_data['quantity'],
+                        entry_time=datetime.fromisoformat(pos_data['entry_time']),
+                        investment_amount=pos_data['investment_amount']
+                    )
+                    self.positions[market] = position
+                    
+            logger.info(f"파일에서 {len(self.positions)}개 포지션 복원 완료")
+            
+        except Exception as e:
+            logger.error(f"포지션 파일 복원 실패: {e}")
+    
+    def restore_positions_from_upbit(self, upbit_api):
+        """Upbit API에서 실제 잔고를 조회하여 포지션 복원"""
+        try:
+            logger.info("Upbit API에서 실제 보유 코인 조회 중...")
+            
+            # 현재 계정의 모든 잔고 조회
+            accounts = upbit_api.get_accounts()
+            
+            restored_positions = {}
+            
+            for account in accounts:
+                currency = account.get('currency')
+                balance = float(account.get('balance', 0))
+                
+                # KRW가 아니고 잔고가 있는 코인들
+                if currency != 'KRW' and balance > 0:
+                    market = f"KRW-{currency}"
+                    
+                    # 현재가 조회
+                    current_price = upbit_api.get_current_price(market)
+                    if not current_price:
+                        logger.warning(f"현재가 조회 실패: {market}")
+                        continue
+                    
+                    # 거래 히스토리에서 진입가 추정 시도
+                    entry_price = self._estimate_entry_price_from_history(market, balance)
+                    if not entry_price:
+                        entry_price = current_price  # 진입가를 찾을 수 없으면 현재가로 설정
+                        logger.warning(f"{market} 진입가 추정 실패, 현재가로 설정: {current_price:,.0f}원")
+                    
+                    # 투자금액 계산
+                    investment_amount = entry_price * balance
+                    
+                    # 포지션 생성
+                    position = Position(
+                        market=market,
+                        entry_price=entry_price,
+                        quantity=balance,
+                        entry_time=datetime.now(),  # 정확한 시간을 모르므로 현재 시간 사용
+                        investment_amount=investment_amount
+                    )
+                    
+                    restored_positions[market] = position
+                    
+                    # 현재 손익 계산
+                    current_pnl = position.calculate_current_pnl(current_price)
+                    pnl_rate = position.calculate_pnl_rate(current_price)
+                    
+                    logger.info(f"포지션 복원: {market}, 수량: {balance:.6f}, "
+                              f"진입가: {entry_price:,.0f}원, 현재 손익: {current_pnl:,.0f}원 ({pnl_rate:+.2f}%)")
+            
+            # 기존 포지션 교체
+            self.positions = restored_positions
+            
+            # 파일에 저장
+            self._save_positions_to_file()
+            
+            logger.info(f"✅ Upbit에서 {len(restored_positions)}개 포지션 복원 완료")
+            
+        except Exception as e:
+            logger.error(f"Upbit 포지션 복원 실패: {e}")
+    
+    def _estimate_entry_price_from_history(self, market: str, current_quantity: float) -> Optional[float]:
+        """거래 히스토리에서 진입가 추정"""
+        try:
+            if not os.path.exists(self.trade_history_file):
+                return None
+            
+            df = pd.read_csv(self.trade_history_file)
+            
+            # 해당 마켓의 거래만 필터링
+            market_trades = df[df['market'] == market].sort_values('timestamp')
+            
+            # 가장 최근 BUY 거래 찾기
+            buy_trades = market_trades[market_trades['action'] == 'BUY']
+            
+            if not buy_trades.empty:
+                # 가장 최근 매수 가격 반환
+                latest_buy = buy_trades.iloc[-1]
+                return float(latest_buy['price'])
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"진입가 추정 실패 ({market}): {e}")
+            return None
     
     def can_open_position(self) -> bool:
         """새로운 포지션을 열 수 있는지 확인"""
@@ -118,6 +249,9 @@ class RiskManager:
             status="포지션 진입"
         )
         
+        # 포지션 파일에 저장
+        self._save_positions_to_file()
+        
         logger.info(f"포지션 추가: {market}, 진입가: {entry_price:,.0f}, 수량: {quantity:.6f}")
         return True
     
@@ -143,6 +277,9 @@ class RiskManager:
         
         # 일일 손익 업데이트
         self._update_daily_pnl(profit_loss)
+        
+        # 포지션 파일에 저장
+        self._save_positions_to_file()
         
         logger.info(f"포지션 종료: {market}, 손익: {profit_loss:,.0f}원")
         return profit_loss

@@ -184,6 +184,9 @@ class CoinButler:
         
         logger.info("🚀 CoinButler 시작!")
         
+        # 기존 포지션 복원 시도
+        self._restore_existing_positions()
+        
         # 초기 잔고 확인
         krw_balance = self.upbit_api.get_krw_balance()
         logger.info(f"현재 KRW 잔고: {krw_balance:,.0f}원")
@@ -289,6 +292,56 @@ class CoinButler:
                 
         except Exception as e:
             logger.error(f"잔고 상태 체크 오류: {e}")
+    
+    def _restore_existing_positions(self):
+        """봇 재시작 시 기존 포지션 복원"""
+        try:
+            logger.info("🔄 기존 포지션 복원 시도 중...")
+            
+            # 1. 파일에서 포지션 복원 (이미 RiskManager 초기화 시 완료)
+            open_positions = self.risk_manager.get_open_positions()
+            
+            if open_positions:
+                logger.info(f"파일에서 {len(open_positions)}개 포지션 복원")
+                for market, position in open_positions.items():
+                    logger.info(f"- {market}: 진입가 {position.entry_price:,.0f}원, 수량 {position.quantity:.6f}")
+            else:
+                logger.info("저장된 포지션이 없습니다.")
+            
+            # 2. Upbit API에서 실제 잔고 확인 및 동기화
+            logger.info("Upbit 실제 잔고와 동기화 중...")
+            self.risk_manager.restore_positions_from_upbit(self.upbit_api)
+            
+            # 3. 복원 완료 후 현재 포지션 상태 표시
+            final_positions = self.risk_manager.get_open_positions()
+            if final_positions:
+                logger.info(f"✅ 총 {len(final_positions)}개 포지션 복원 완료:")
+                
+                total_investment = 0
+                total_current_value = 0
+                
+                for market, position in final_positions.items():
+                    current_price = self.upbit_api.get_current_price(market)
+                    if current_price:
+                        current_value = position.quantity * current_price
+                        pnl = current_value - position.investment_amount
+                        pnl_rate = (pnl / position.investment_amount) * 100
+                        
+                        total_investment += position.investment_amount
+                        total_current_value += current_value
+                        
+                        logger.info(f"  {market}: {pnl:,.0f}원 ({pnl_rate:+.2f}%)")
+                
+                if total_investment > 0:
+                    total_pnl = total_current_value - total_investment
+                    total_pnl_rate = (total_pnl / total_investment) * 100
+                    logger.info(f"📊 전체 미실현 손익: {total_pnl:,.0f}원 ({total_pnl_rate:+.2f}%)")
+            else:
+                logger.info("복원된 포지션이 없습니다. 새로 거래를 시작합니다.")
+                
+        except Exception as e:
+            logger.error(f"포지션 복원 중 오류: {e}")
+            logger.info("포지션 복원에 실패했지만 봇은 계속 실행됩니다.")
     
     def _scan_for_opportunities(self):
         """새로운 매수 기회 탐색"""
