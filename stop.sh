@@ -1,91 +1,149 @@
 #!/bin/bash
 
-# CoinButler 중지 스크립트
-# Ubuntu/Linux 환경에서 사용
+# CoinButler V2 중지 스크립트
 
 set -e
 
-echo "🛑 CoinButler 자동매매 시스템 중지 중..."
-echo "============================================"
+# 색상 정의
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-# PID 파일 확인
-if [ -f "coinbutler.pid" ]; then
-    PID=$(cat coinbutler.pid)
+# 로그 함수
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# 변수 설정
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PID_FILE="$SCRIPT_DIR/coinbutler.pid"
+
+echo "🛑 CoinButler V2 시스템 중지"
+echo "============================"
+
+# PID 파일 확인 및 프로세스 중지
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
     
-    if ps -p $PID > /dev/null 2>&1; then
-        echo "📋 프로세스 중지 중... (PID: $PID)"
+    if ps -p "$PID" > /dev/null 2>&1; then
+        log_info "CoinButler 프로세스 중지 중... (PID: $PID)"
         
-        # 프로세스와 자식 프로세스 모두 종료
-        pkill -P $PID 2>/dev/null || true
-        kill $PID 2>/dev/null || true
+        # 정상 종료 시도
+        kill -TERM "$PID" 2>/dev/null || true
         
-        # 종료 확인 (최대 10초 대기)
-        for i in {1..10}; do
-            if ! ps -p $PID > /dev/null 2>&1; then
-                echo "✅ 프로세스가 정상적으로 중지되었습니다."
+        # 종료 확인 (최대 15초 대기)
+        for i in {1..15}; do
+            if ! ps -p "$PID" > /dev/null 2>&1; then
+                log_info "✅ 프로세스가 정상적으로 중지되었습니다."
                 break
             fi
-            echo "⏳ 프로세스 종료 대기 중... ($i/10)"
-            sleep 1
+            if [ $i -eq 15 ]; then
+                log_warn "정상 종료 시간이 초과되어 강제 종료합니다..."
+                kill -KILL "$PID" 2>/dev/null || true
+                sleep 1
+                if ! ps -p "$PID" > /dev/null 2>&1; then
+                    log_info "✅ 프로세스가 강제 종료되었습니다."
+                else
+                    log_error "프로세스 종료에 실패했습니다."
+                fi
+            else
+                echo -n "."
+                sleep 1
+            fi
         done
         
-        # 여전히 실행 중이면 강제 종료
-        if ps -p $PID > /dev/null 2>&1; then
-            echo "⚠️  강제 종료 실행 중..."
-            kill -9 $PID 2>/dev/null || true
-            echo "✅ 프로세스가 강제 종료되었습니다."
-        fi
-        
     else
-        echo "⚠️  해당 PID의 프로세스가 실행 중이 아닙니다."
+        log_warn "해당 PID의 프로세스가 실행 중이 아닙니다."
     fi
     
     # PID 파일 삭제
-    rm -f coinbutler.pid
+    rm -f "$PID_FILE"
+    log_info "PID 파일을 정리했습니다."
     
 else
-    echo "⚠️  coinbutler.pid 파일을 찾을 수 없습니다."
+    log_warn "PID 파일을 찾을 수 없습니다."
 fi
 
 # 관련 프로세스 정리
-echo "🧹 관련 프로세스 정리 중..."
+log_info "관련 프로세스 정리 중..."
 
-# CoinButler 관련 프로세스 찾아서 종료
-PIDS=$(pgrep -f "python.*main.py" 2>/dev/null || true)
-if [ ! -z "$PIDS" ]; then
-    echo "📋 CoinButler 프로세스 발견: $PIDS"
-    echo "$PIDS" | xargs -r kill -TERM
+# CoinButler Python 프로세스 찾기
+PYTHON_PIDS=$(pgrep -f "python.*main.py" 2>/dev/null || true)
+if [ ! -z "$PYTHON_PIDS" ]; then
+    log_info "CoinButler Python 프로세스 발견: $PYTHON_PIDS"
+    echo "$PYTHON_PIDS" | xargs -r kill -TERM 2>/dev/null || true
     sleep 2
     
     # 여전히 실행 중인 프로세스 강제 종료
     REMAINING=$(pgrep -f "python.*main.py" 2>/dev/null || true)
     if [ ! -z "$REMAINING" ]; then
-        echo "⚠️  강제 종료: $REMAINING"
-        echo "$REMAINING" | xargs -r kill -9
+        log_warn "강제 종료: $REMAINING"
+        echo "$REMAINING" | xargs -r kill -KILL 2>/dev/null || true
     fi
 fi
 
 # Streamlit 프로세스 정리
-STREAMLIT_PIDS=$(pgrep -f "streamlit.*dashboard.py" 2>/dev/null || true)
+STREAMLIT_PIDS=$(pgrep -f "streamlit.*dashboard" 2>/dev/null || true)
 if [ ! -z "$STREAMLIT_PIDS" ]; then
-    echo "📊 Streamlit 프로세스 정리: $STREAMLIT_PIDS"
-    echo "$STREAMLIT_PIDS" | xargs -r kill -TERM
+    log_info "Streamlit 프로세스 정리: $STREAMLIT_PIDS"
+    echo "$STREAMLIT_PIDS" | xargs -r kill -TERM 2>/dev/null || true
     sleep 1
     
-    # 여전히 실행 중인 프로세스 강제 종료
-    REMAINING=$(pgrep -f "streamlit.*dashboard.py" 2>/dev/null || true)
+    # 강제 종료
+    REMAINING=$(pgrep -f "streamlit.*dashboard" 2>/dev/null || true)
     if [ ! -z "$REMAINING" ]; then
-        echo "$REMAINING" | xargs -r kill -9
+        echo "$REMAINING" | xargs -r kill -KILL 2>/dev/null || true
     fi
 fi
 
-echo "✅ CoinButler가 완전히 중지되었습니다."
+# 포트 8501 사용 프로세스 정리
+if command -v lsof >/dev/null 2>&1; then
+    PORT_PIDS=$(lsof -ti :8501 2>/dev/null || true)
+    if [ ! -z "$PORT_PIDS" ]; then
+        log_info "포트 8501 사용 프로세스 정리: $PORT_PIDS"
+        echo "$PORT_PIDS" | xargs -r kill -TERM 2>/dev/null || true
+        sleep 1
+        
+        # 강제 종료
+        REMAINING=$(lsof -ti :8501 2>/dev/null || true)
+        if [ ! -z "$REMAINING" ]; then
+            echo "$REMAINING" | xargs -r kill -KILL 2>/dev/null || true
+        fi
+    fi
+fi
 
-# 실행 중인 CoinButler 프로세스 확인
+log_info "✅ CoinButler 시스템이 완전히 중지되었습니다."
+
+# 최종 상태 확인
+echo ""
+log_info "최종 상태 확인:"
+
 RUNNING_PROCESSES=$(pgrep -f "CoinButler\|main\.py\|dashboard\.py" 2>/dev/null || true)
 if [ -z "$RUNNING_PROCESSES" ]; then
-    echo "🔍 확인 완료: CoinButler 관련 프로세스가 모두 중지되었습니다."
+    log_info "🔍 ✅ CoinButler 관련 프로세스가 모두 중지되었습니다."
 else
-    echo "⚠️  일부 프로세스가 여전히 실행 중입니다:"
+    log_warn "⚠️  일부 프로세스가 여전히 실행 중입니다:"
     ps -p $RUNNING_PROCESSES -o pid,ppid,cmd 2>/dev/null || true
 fi
+
+# 포트 상태 확인
+if command -v lsof >/dev/null 2>&1; then
+    if lsof -i :8501 >/dev/null 2>&1; then
+        log_warn "⚠️  포트 8501이 여전히 사용 중입니다."
+        lsof -i :8501
+    else
+        log_info "🌐 ✅ 포트 8501이 해제되었습니다."
+    fi
+fi
+
+echo ""
+log_info "🚀 다시 시작하려면: ./start.sh"

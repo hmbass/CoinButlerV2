@@ -6,14 +6,13 @@ import time
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-import openai
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 from trade_utils import UpbitAPI, MarketAnalyzer, get_upbit_api
 from risk_manager import RiskManager, get_risk_manager
 from notifier import (
-    init_notifier, notify_buy, notify_sell, notify_error, 
-    notify_bot_status, notify_daily_loss_limit, notify_volume_spike
+    init_notifier, notify_buy, notify_sell
 )
 
 # 환경변수 로드
@@ -31,70 +30,108 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class AIAnalyzer:
-    """ChatGPT를 이용한 종목 분석기"""
+    """Google Gemini를 이용한 종목 분석기"""
     
     def __init__(self, api_key: str):
-        self.client = openai.OpenAI(api_key=api_key)
+        if api_key:
+            try:
+                genai.configure(api_key=api_key)
+                self.model = genai.GenerativeModel('gemini-pro')
+                self.enabled = True
+                logger.info("Gemini AI 모델이 성공적으로 초기화되었습니다.")
+            except Exception as e:
+                logger.error(f"Gemini AI 초기화 실패: {e}")
+                self.enabled = False
+        else:
+            self.enabled = False
         
     def analyze_market_condition(self, market_data: List[Dict]) -> Dict[str, any]:
         """시장 상황을 분석하여 매수할 종목 추천"""
+        if not self.enabled:
+            logger.info("Gemini API 키가 없어서 AI 분석을 건너뜁니다.")
+            return {
+                "recommended_coin": None,
+                "confidence": 0,
+                "reason": "AI 분석 비활성화",
+                "risk_level": "MEDIUM"
+            }
+        
         try:
             # 거래량 급등 종목들의 정보를 텍스트로 정리
             market_info = []
-            for data in market_data[:10]:  # 상위 10개만 분석
+            for data in market_data[:3]:  # 상위 3개만 분석 (Gemini는 더 관대함)
                 market_info.append(
-                    f"- {data['market']}: 거래량 {data['volume_ratio']:.1f}배 증가, "
+                    f"- {data['market']}: 거래량 {data.get('volume_ratio', 2.0):.1f}배 증가, "
                     f"가격변동 {data['price_change']:+.2f}%, 현재가 {data['current_price']:,.0f}원"
                 )
             
             market_text = "\n".join(market_info)
             
             prompt = f"""
-당신은 암호화폐 거래 전문가입니다. 
-다음은 최근 거래량이 급등한 코인들의 정보입니다:
+암호화폐 거래 전문가로서 다음 거래량 급등 종목들을 분석하고 가장 매수하기 좋은 1개를 추천해주세요:
 
 {market_text}
 
-다음 기준을 고려하여 가장 매수하기 좋은 1개 종목을 추천해주세요:
-1. 거래량 급등의 지속 가능성
-2. 기술적 분석 관점에서의 상승 여력
-3. 리스크 대비 수익 가능성
-4. 현재 시장 트렌드와의 부합성
-
-응답 형식:
+다음 JSON 형식으로만 응답해주세요:
 {{
-  "recommended_coin": "추천 코인명 (예: BTC, ETH)",
-  "confidence": 신뢰도 (1-10),
-  "reason": "추천 이유 (한 줄로)",
-  "risk_level": "HIGH/MEDIUM/LOW"
+  "recommended_coin": "BTC",
+  "confidence": 8,
+  "reason": "추천 이유를 한 줄로",
+  "risk_level": "LOW"
 }}
 
-JSON 형식으로만 응답해주세요.
+기준:
+1. 거래량 증가의 지속성
+2. 기술적 분석 상승 여력  
+3. 리스크 대비 수익성
+4. 현재 시장 상황
+
+JSON만 출력하세요.
             """
             
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 암호화폐 거래 전문가입니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=200
-            )
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
             
-            # JSON 응답 파싱
+            # JSON 부분만 추출 (```json 태그 제거)
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            
+            # JSON 파싱
             import json
-            result = json.loads(response.choices[0].message.content)
-            logger.info(f"AI 분석 결과: {result}")
+            result = json.loads(response_text)
+            logger.info(f"Gemini AI 분석 결과: {result}")
             
             return result
             
-        except Exception as e:
-            logger.error(f"AI 분석 실패: {e}")
+        except genai.types.BrokenResponseError as e:
+            logger.error(f"Gemini AI 응답 파싱 오류: {e}")
             return {
                 "recommended_coin": None,
                 "confidence": 0,
-                "reason": "분석 실패",
+                "reason": "AI 응답 파싱 실패",
+                "risk_level": "HIGH"
+            }
+        except Exception as e:
+            logger.error(f"Gemini AI 분석 실패: {e}")
+            # 첫 번째 종목을 기본값으로 반환
+            if market_data:
+                first_coin = market_data[0]['market'].replace('KRW-', '')
+                return {
+                    "recommended_coin": first_coin,
+                    "confidence": 5,
+                    "reason": "AI 분석 실패로 첫 번째 종목 선택",
+                    "risk_level": "MEDIUM"
+                }
+            return {
+                "recommended_coin": None,
+                "confidence": 0,
+                "reason": "AI 분석 실패",
                 "risk_level": "HIGH"
             }
 
@@ -107,9 +144,9 @@ class CoinButler:
         self.market_analyzer = MarketAnalyzer(self.upbit_api)
         self.risk_manager = get_risk_manager()
         
-        # AI 분석기 초기화
-        openai_key = os.getenv('OPENAI_API_KEY')
-        self.ai_analyzer = AIAnalyzer(openai_key) if openai_key else None
+        # AI 분석기 초기화 (Google Gemini)
+        gemini_key = os.getenv('GEMINI_API_KEY')
+        self.ai_analyzer = AIAnalyzer(gemini_key) if gemini_key else None
         
         # 설정값 로드
         self.investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 100000))
@@ -137,7 +174,6 @@ class CoinButler:
         self.is_paused = False
         
         logger.info("🚀 CoinButler 시작!")
-        notify_bot_status("started", "자동매매 봇이 시작되었습니다.")
         
         # 초기 잔고 확인
         krw_balance = self.upbit_api.get_krw_balance()
@@ -146,7 +182,6 @@ class CoinButler:
         if krw_balance < self.investment_amount:
             error_msg = f"잔고 부족! 현재: {krw_balance:,.0f}원, 필요: {self.investment_amount:,.0f}원"
             logger.error(error_msg)
-            notify_error("잔고 부족", error_msg)
             self.stop()
             return
         
@@ -157,19 +192,16 @@ class CoinButler:
         """봇 중지"""
         self.is_running = False
         logger.info("🛑 CoinButler 중지!")
-        notify_bot_status("stopped", "자동매매 봇이 중지되었습니다.")
     
     def pause(self):
         """봇 일시정지"""
         self.is_paused = True
         logger.info("⏸️ CoinButler 일시정지!")
-        notify_bot_status("paused", "자동매매 봇이 일시정지되었습니다.")
     
     def resume(self):
         """봇 재개"""
         self.is_paused = False
         logger.info("▶️ CoinButler 재개!")
-        notify_bot_status("started", "자동매매 봇이 재개되었습니다.")
     
     def _main_loop(self):
         """메인 거래 루프"""
@@ -182,15 +214,15 @@ class CoinButler:
                 # 일일 손실 한도 체크
                 if self.risk_manager.check_daily_loss_limit():
                     daily_pnl = self.risk_manager.get_daily_pnl()
-                    notify_daily_loss_limit(daily_pnl, self.risk_manager.daily_loss_limit)
+                    logger.warning(f"일일 손실 한도 초과! 현재: {daily_pnl:,.0f}원, 한도: {self.risk_manager.daily_loss_limit:,.0f}원")
                     self.pause()
                     continue
                 
                 # 기존 포지션 관리 (매도 조건 체크)
                 self._manage_positions()
                 
-                # 새로운 매수 기회 탐색 (5분마다)
-                if datetime.now() - self.last_market_scan > timedelta(minutes=5):
+                # 새로운 매수 기회 탐색 (10분마다로 주기 확장)
+                if datetime.now() - self.last_market_scan > timedelta(minutes=10):
                     self._scan_for_opportunities()
                     self.last_market_scan = datetime.now()
                 
@@ -200,7 +232,6 @@ class CoinButler:
             logger.info("사용자에 의한 중단")
         except Exception as e:
             logger.error(f"메인 루프 오류: {e}")
-            notify_error("시스템 오류", str(e))
         finally:
             self.stop()
     
@@ -241,12 +272,27 @@ class CoinButler:
             logger.info("🔍 매수 기회 탐색 중...")
             
             # 거래 가능한 마켓 조회
-            markets = self.market_analyzer.get_tradeable_markets()
+            try:
+                markets = self.market_analyzer.get_tradeable_markets()
+                if not markets:
+                    logger.warning("거래 가능한 마켓 조회 실패")
+                    return
+            except Exception as e:
+                logger.error(f"마켓 목록 조회 실패: {e}")
+                return
+            
             spike_candidates = []
             
-            # 거래량 급등 종목 찾기
-            for market in markets[:30]:  # 상위 30개만 체크
+            # 거래량 급등 종목 찾기 (속도 조절)
+            scan_count = min(20, len(markets))  # 최대 20개만 스캔
+            logger.info(f"상위 {scan_count}개 종목 스캔 중...")
+            
+            for i, market in enumerate(markets[:scan_count]):
                 try:
+                    # 매 5번째 종목마다 짧은 휴식 (API 제한 완화)
+                    if i > 0 and i % 5 == 0:
+                        time.sleep(1)
+                    
                     if self.market_analyzer.detect_volume_spike(market, self.volume_spike_threshold):
                         current_price = self.upbit_api.get_current_price(market)
                         price_change = self.market_analyzer.get_price_change(market)
@@ -261,11 +307,13 @@ class CoinButler:
                                     'volume_ratio': self.volume_spike_threshold
                                 })
                                 
-                                # 거래량 급등 알림
-                                notify_volume_spike(market, self.volume_spike_threshold, price_change)
+                                # 거래량 급등 로그 (알림은 제거)
+                                logger.info(f"거래량 급등 감지: {market} ({self.volume_spike_threshold:.1f}배, {price_change:+.2f}%)")
                                 
                 except Exception as e:
                     logger.error(f"시장 스캔 오류 ({market}): {e}")
+                    # API 오류 시 잠시 대기
+                    time.sleep(2)
                     continue
             
             if not spike_candidates:
@@ -277,24 +325,40 @@ class CoinButler:
             # AI 분석 (옵션)
             best_candidate = spike_candidates[0]  # 기본값: 첫 번째 후보
             
-            if self.ai_analyzer and len(spike_candidates) > 1:
-                ai_result = self.ai_analyzer.analyze_market_condition(spike_candidates)
-                
-                if ai_result.get('recommended_coin') and ai_result.get('confidence', 0) >= 6:
-                    # AI 추천 종목 찾기
-                    recommended_market = f"KRW-{ai_result['recommended_coin']}"
-                    for candidate in spike_candidates:
-                        if candidate['market'] == recommended_market:
-                            best_candidate = candidate
-                            logger.info(f"AI 추천 종목 선택: {recommended_market}")
-                            break
+            if self.ai_analyzer and self.ai_analyzer.enabled and len(spike_candidates) > 1:
+                try:
+                    ai_result = self.ai_analyzer.analyze_market_condition(spike_candidates)
+                    
+                    if (ai_result.get('recommended_coin') and 
+                        ai_result.get('confidence', 0) >= 6 and 
+                        ai_result.get('risk_level') != 'HIGH'):
+                        
+                        # AI 추천 종목 찾기
+                        recommended_market = f"KRW-{ai_result['recommended_coin']}"
+                        for candidate in spike_candidates:
+                            if candidate['market'] == recommended_market:
+                                best_candidate = candidate
+                                logger.info(f"AI 추천 종목 선택: {recommended_market} (신뢰도: {ai_result['confidence']})")
+                                break
+                        else:
+                            logger.info(f"AI 추천 종목({recommended_market})이 후보에 없어서 첫 번째 후보 선택")
+                    else:
+                        logger.info(f"AI 분석 결과 신뢰도 부족 또는 고위험 - 첫 번째 후보 선택")
+                        
+                except Exception as e:
+                    logger.error(f"AI 분석 중 오류: {e}")
+                    logger.info("AI 분석 실패로 첫 번째 후보 선택")
+            else:
+                if not self.ai_analyzer or not self.ai_analyzer.enabled:
+                    logger.info("AI 분석 비활성화 - 첫 번째 후보 선택")
+                else:
+                    logger.info("후보가 1개뿐이어서 AI 분석 건너뜀")
             
             # 매수 실행
             self._execute_buy(best_candidate)
             
         except Exception as e:
             logger.error(f"매수 기회 탐색 오류: {e}")
-            notify_error("매수 탐색 오류", str(e))
     
     def _execute_buy(self, candidate: Dict):
         """매수 실행"""
@@ -346,7 +410,6 @@ class CoinButler:
                 
         except Exception as e:
             logger.error(f"매수 실행 오류 ({market}): {e}")
-            notify_error("매수 실행 오류", f"{market}: {str(e)}")
     
     def _execute_sell(self, market: str, current_price: float, reason: str):
         """매도 실행"""
@@ -388,7 +451,6 @@ class CoinButler:
                 
         except Exception as e:
             logger.error(f"매도 실행 오류 ({market}): {e}")
-            notify_error("매도 실행 오류", f"{market}: {str(e)}")
     
     def get_status(self) -> Dict:
         """봇 현재 상태 반환"""
@@ -421,7 +483,6 @@ def main():
         logger.info("사용자 중단")
     except Exception as e:
         logger.error(f"실행 오류: {e}")
-        notify_error("시스템 오류", str(e))
     finally:
         bot.stop()
 

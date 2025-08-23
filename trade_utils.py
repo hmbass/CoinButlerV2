@@ -13,10 +13,64 @@ from typing import Optional, Dict, List, Any
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
+from functools import wraps
+import random
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# API 호출 제한 관리
+class RateLimiter:
+    """API 호출 제한 관리 클래스"""
+    
+    def __init__(self, calls_per_second: int = 8):  # 업비트 제한: 초당 10회, 안전하게 8회로 설정
+        self.calls_per_second = calls_per_second
+        self.last_call_time = 0
+        self.call_interval = 1.0 / calls_per_second
+    
+    def wait_if_needed(self):
+        """필요 시 대기"""
+        current_time = time.time()
+        time_since_last_call = current_time - self.last_call_time
+        
+        if time_since_last_call < self.call_interval:
+            wait_time = self.call_interval - time_since_last_call
+            time.sleep(wait_time)
+        
+        self.last_call_time = time.time()
+
+# 전역 레이트 리미터
+upbit_rate_limiter = RateLimiter()
+
+def api_retry(max_retries: int = 3, delay_base: float = 1.0):
+    """API 호출 재시도 데코레이터"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    # 레이트 리미터 적용
+                    upbit_rate_limiter.wait_if_needed()
+                    return func(*args, **kwargs)
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 429:  # Too Many Requests
+                        if attempt < max_retries - 1:
+                            delay = delay_base * (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff with jitter
+                            logger.warning(f"API 제한 도달, {delay:.2f}초 후 재시도 ({attempt + 1}/{max_retries})")
+                            time.sleep(delay)
+                            continue
+                    raise e
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        delay = delay_base * (2 ** attempt)
+                        logger.error(f"API 호출 실패, {delay:.2f}초 후 재시도 ({attempt + 1}/{max_retries}): {e}")
+                        time.sleep(delay)
+                        continue
+                    raise e
+            return None
+        return wrapper
+    return decorator
 
 class UpbitAPI:
     """업비트 API 래퍼 클래스"""
@@ -71,28 +125,22 @@ class UpbitAPI:
                 return float(account.get('balance', 0))
         return 0.0
     
+    @api_retry(max_retries=3, delay_base=2.0)
     def get_current_price(self, market: str) -> Optional[float]:
         """현재가 조회"""
-        try:
-            response = requests.get(f"{self.server_url}/v1/ticker", 
-                                  params={'markets': market})
-            response.raise_for_status()
-            data = response.json()
-            return float(data[0].get('trade_price', 0)) if data else None
-        except Exception as e:
-            logger.error(f"현재가 조회 실패 ({market}): {e}")
-            return None
+        response = requests.get(f"{self.server_url}/v1/ticker", 
+                              params={'markets': market})
+        response.raise_for_status()
+        data = response.json()
+        return float(data[0].get('trade_price', 0)) if data else None
     
+    @api_retry(max_retries=3, delay_base=2.0)
     def get_candles(self, market: str, minutes: int = 5, count: int = 200) -> List[Dict[str, Any]]:
         """분봉 데이터 조회"""
-        try:
-            response = requests.get(f"{self.server_url}/v1/candles/minutes/{minutes}",
-                                  params={'market': market, 'count': count})
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"캔들 데이터 조회 실패 ({market}): {e}")
-            return []
+        response = requests.get(f"{self.server_url}/v1/candles/minutes/{minutes}",
+                              params={'market': market, 'count': count})
+        response.raise_for_status()
+        return response.json()
     
     def place_buy_order(self, market: str, price: float) -> Optional[Dict[str, Any]]:
         """시장가 매수 주문"""
@@ -187,7 +235,7 @@ class MarketAnalyzer:
         """거래량 급등 감지"""
         try:
             candles = self.api.get_candles(market, minutes=5, count=10)
-            if len(candles) < 5:
+            if not candles or len(candles) < 5:
                 return False
             
             # 최근 5분봉의 거래량
@@ -210,37 +258,30 @@ class MarketAnalyzer:
             logger.error(f"거래량 급등 감지 실패 ({market}): {e}")
             return False
     
+    @api_retry(max_retries=3, delay_base=2.0)
     def get_price_change(self, market: str) -> Optional[float]:
         """가격 변동률 조회"""
-        try:
-            response = requests.get(f"{self.api.server_url}/v1/ticker",
-                                  params={'markets': market})
-            response.raise_for_status()
-            data = response.json()
-            
-            if data:
-                return float(data[0].get('signed_change_rate', 0))
-            return None
-        except Exception as e:
-            logger.error(f"가격 변동률 조회 실패 ({market}): {e}")
-            return None
+        response = requests.get(f"{self.api.server_url}/v1/ticker",
+                              params={'markets': market})
+        response.raise_for_status()
+        data = response.json()
+        
+        if data:
+            return float(data[0].get('signed_change_rate', 0))
+        return None
     
+    @api_retry(max_retries=3, delay_base=2.0)
     def get_tradeable_markets(self) -> List[str]:
         """거래 가능한 KRW 마켓 목록 조회"""
-        try:
-            response = requests.get(f"{self.api.server_url}/v1/market/all")
-            response.raise_for_status()
-            markets = response.json()
-            
-            # KRW 마켓만 필터링하고 상위 거래량 기준으로 정렬
-            krw_markets = [market['market'] for market in markets 
-                          if market['market'].startswith('KRW-')]
-            
-            return krw_markets[:50]  # 상위 50개만 반환
-            
-        except Exception as e:
-            logger.error(f"거래 가능한 마켓 조회 실패: {e}")
-            return []
+        response = requests.get(f"{self.api.server_url}/v1/market/all")
+        response.raise_for_status()
+        markets = response.json()
+        
+        # KRW 마켓만 필터링하고 상위 거래량 기준으로 정렬
+        krw_markets = [market['market'] for market in markets 
+                      if market['market'].startswith('KRW-')]
+        
+        return krw_markets[:50]  # 상위 50개만 반환
 
 def get_upbit_api() -> UpbitAPI:
     """환경 변수에서 업비트 API 인스턴스 생성"""
