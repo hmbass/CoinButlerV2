@@ -62,8 +62,6 @@ st.markdown("""
 
 def init_session_state():
     """세션 상태 초기화"""
-    if 'bot' not in st.session_state:
-        st.session_state.bot = get_bot()
     if 'last_update' not in st.session_state:
         st.session_state.last_update = datetime.now()
     if 'auto_refresh' not in st.session_state:
@@ -86,6 +84,87 @@ def get_status_color(status):
     }
     return colors.get(status, '#666666')
 
+def get_real_bot_status():
+    """실제 봇 상태를 파일 시스템에서 확인"""
+    try:
+        import subprocess
+        import json
+        
+        # PID 파일들 확인
+        bot_pid_file = "pids/coinbutler_bot.pid"
+        dashboard_pid_file = "pids/coinbutler_dashboard.pid"
+        
+        bot_running = False
+        if os.path.exists(bot_pid_file):
+            try:
+                with open(bot_pid_file, 'r') as f:
+                    pid = int(f.read().strip())
+                # 프로세스가 실제로 실행 중인지 확인 (Unix 시스템용)
+                result = subprocess.run(['kill', '-0', str(pid)], 
+                                      capture_output=True, text=True)
+                bot_running = result.returncode == 0
+            except:
+                bot_running = False
+        
+        # 일일 손익 정보
+        daily_pnl = 0
+        if os.path.exists("daily_pnl.json"):
+            try:
+                with open("daily_pnl.json", 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                today = datetime.now().date().isoformat()
+                daily_pnl = data.get(today, 0)
+            except:
+                daily_pnl = 0
+        
+        # 거래 통계 (간단 버전)
+        trading_stats = {'total_trades': 0, 'win_rate': 0, 'total_pnl': 0}
+        if os.path.exists("trade_history.csv"):
+            try:
+                import pandas as pd
+                df = pd.read_csv("trade_history.csv")
+                if not df.empty:
+                    sell_trades = df[df['action'] == 'SELL']
+                    if not sell_trades.empty:
+                        trading_stats['total_trades'] = len(sell_trades)
+                        winning_trades = len(sell_trades[sell_trades['profit_loss'] > 0])
+                        trading_stats['win_rate'] = (winning_trades / len(sell_trades)) * 100
+                        trading_stats['total_pnl'] = sell_trades['profit_loss'].sum()
+            except:
+                pass
+        
+        # KRW 잔고 (API 호출)
+        krw_balance = 0
+        try:
+            upbit_api = get_upbit_api()
+            krw_balance = upbit_api.get_krw_balance()
+        except:
+            krw_balance = 0
+        
+        return {
+            'is_running': bot_running,
+            'is_paused': False,  # 로그에서 파악해야 하지만 일단 False
+            'krw_balance': krw_balance,
+            'daily_pnl': daily_pnl,
+            'trading_stats': trading_stats,
+            'positions': {
+                'total_positions': 0,  # 실제 포지션 파일이 있다면 여기서 읽어야 함
+                'max_positions': int(os.getenv('MAX_POSITIONS', 3)),
+                'available_slots': int(os.getenv('MAX_POSITIONS', 3)),
+                'positions': {}
+            }
+        }
+    except Exception as e:
+        st.error(f"봇 상태 조회 오류: {e}")
+        return {
+            'is_running': False,
+            'is_paused': False,
+            'krw_balance': 0,
+            'daily_pnl': 0,
+            'trading_stats': {'total_trades': 0, 'win_rate': 0, 'total_pnl': 0},
+            'positions': {'total_positions': 0, 'max_positions': 3, 'available_slots': 3, 'positions': {}}
+        }
+
 def main():
     """메인 대시보드"""
     init_session_state()
@@ -102,7 +181,7 @@ def main():
     with st.sidebar:
         st.header("🎛️ 봇 제어")
         
-        bot_status = st.session_state.bot.get_status()
+        bot_status = get_real_bot_status()
         
         # 상태 표시
         if bot_status['is_running']:
@@ -119,26 +198,28 @@ def main():
         st.markdown(f'<p class="{status_color}"><strong>{status_text}</strong></p>', 
                    unsafe_allow_html=True)
         
-        # 제어 버튼
-        col1, col2 = st.columns(2)
+        # 제어 버튼 - 현재는 상태 표시만 (실제 제어는 터미널에서)
+        st.info("🎛️ **봇 제어는 터미널에서 수행하세요:**")
         
+        col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("▶️ 시작", disabled=bot_status['is_running'] and not bot_status['is_paused']):
-                if not bot_status['is_running']:
-                    # 새 스레드에서 봇 시작 (실제 구현에서는 백그라운드 처리 필요)
-                    st.success("봇 시작 요청됨")
-                elif bot_status['is_paused']:
-                    st.session_state.bot.resume()
-                    st.success("봇 재개됨")
-        
+            st.code("./start.sh", language="bash")
+            st.caption("봇 시작")
         with col2:
-            if st.button("⏸️ 일시정지", disabled=not bot_status['is_running'] or bot_status['is_paused']):
-                st.session_state.bot.pause()
-                st.success("봇 일시정지됨")
-        
-        if st.button("🛑 중지", disabled=not bot_status['is_running']):
-            st.session_state.bot.stop()
-            st.success("봇 중지됨")
+            st.code("./status.sh", language="bash") 
+            st.caption("상태 확인")
+        with col3:
+            st.code("./stop.sh", language="bash")
+            st.caption("봇 중지")
+            
+        # 봇 상태에 따른 추가 정보
+        if bot_status['is_running']:
+            if bot_status['is_paused']:
+                st.warning("⏸️ 봇이 일시정지 상태입니다. (일일 손실 한도 초과 등)")
+            else:
+                st.success("🟢 봇이 정상 실행 중입니다.")
+        else:
+            st.error("🔴 봇이 중지된 상태입니다.")
         
         st.markdown("---")
         
@@ -156,10 +237,10 @@ def main():
         
         if st.button("🔄 수동 새로고침"):
             st.session_state.last_update = datetime.now()
-            st.experimental_rerun()
+            st.rerun()
     
     # 메인 컨텐츠
-    bot_status = st.session_state.bot.get_status()
+    bot_status = get_real_bot_status()
     risk_manager = get_risk_manager()
     
     # 상단 메트릭
@@ -216,7 +297,7 @@ def main():
     # 자동 새로고침
     if st.session_state.auto_refresh:
         time.sleep(5)
-        st.experimental_rerun()
+        st.rerun()
 
 def show_realtime_status(bot_status, risk_manager):
     """실시간 현황 탭"""
@@ -437,31 +518,38 @@ def show_logs():
     st.subheader("📋 시스템 로그")
     
     try:
-        # 로그 파일 읽기
-        if os.path.exists("coinbutler.log"):
-            with open("coinbutler.log", "r", encoding="utf-8") as f:
-                logs = f.readlines()
-            
-            # 최근 100줄만 표시
-            recent_logs = logs[-100:] if len(logs) > 100 else logs
-            
-            # 로그 레벨 필터
-            log_level = st.selectbox("로그 레벨", ["ALL", "ERROR", "WARNING", "INFO"])
-            
-            filtered_logs = []
-            for log in recent_logs:
-                if log_level == "ALL":
-                    filtered_logs.append(log)
-                elif log_level in log.upper():
-                    filtered_logs.append(log)
-            
-            if filtered_logs:
-                log_text = "".join(reversed(filtered_logs))  # 최신 로그부터 표시
-                st.code(log_text, language="text")
-            else:
-                st.info("해당 레벨의 로그가 없습니다.")
-        else:
+        # 로그 파일 읽기 (새로운 경로 구조)
+        log_files = ["logs/coinbutler_bot.log", "logs/coinbutler.log", "coinbutler.log"]
+        logs = []
+        
+        for log_file in log_files:
+            if os.path.exists(log_file):
+                with open(log_file, "r", encoding="utf-8") as f:
+                    logs = f.readlines()
+                break
+        
+        if not logs:
             st.info("로그 파일이 없습니다.")
+            return
+            
+        # 최근 100줄만 표시
+        recent_logs = logs[-100:] if len(logs) > 100 else logs
+        
+        # 로그 레벨 필터
+        log_level = st.selectbox("로그 레벨", ["ALL", "ERROR", "WARNING", "INFO"])
+        
+        filtered_logs = []
+        for log in recent_logs:
+            if log_level == "ALL":
+                filtered_logs.append(log)
+            elif log_level in log.upper():
+                filtered_logs.append(log)
+        
+        if filtered_logs:
+            log_text = "".join(reversed(filtered_logs))  # 최신 로그부터 표시
+            st.code(log_text, language="text")
+        else:
+            st.info("해당 레벨의 로그가 없습니다.")
             
     except Exception as e:
         st.error(f"로그 로드 오류: {e}")
