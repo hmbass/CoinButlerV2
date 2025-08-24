@@ -142,6 +142,183 @@ JSON만 출력하세요.
                 "reason": "AI 분석 실패",
                 "risk_level": "HIGH"
             }
+    
+    def analyze_position_amount(self, market_data: Dict, krw_balance: float, 
+                              current_positions: int, max_positions: int) -> Dict[str, any]:
+        """분할매수 금액 결정을 위한 AI 분석"""
+        if not self.enabled:
+            return {
+                "investment_amount": min(30000, krw_balance * 0.8),
+                "reason": "AI 분석 비활성화 - 기본 금액 사용",
+                "split_ratio": 1.0
+            }
+        
+        try:
+            market = market_data.get('market', '')
+            current_price = market_data.get('current_price', 0)
+            volume_ratio = market_data.get('volume_ratio', 2.0)
+            price_change = market_data.get('price_change', 0)
+            
+            available_balance = krw_balance
+            remaining_slots = max_positions - current_positions
+            
+            prompt = f"""
+암호화폐 분할매수 전문가로서 다음 정보를 바탕으로 최적의 투자 금액을 결정해주세요:
+
+**종목 정보:**
+- 종목: {market}
+- 현재가: {current_price:,.0f}원
+- 거래량 증가: {volume_ratio:.1f}배
+- 가격 변동: {price_change:+.2f}%
+
+**계정 정보:**
+- 사용 가능 잔고: {available_balance:,.0f}원
+- 현재 보유 포지션: {current_positions}개
+- 남은 포지션 슬롯: {remaining_slots}개
+
+다음 JSON 형식으로만 응답해주세요:
+{{
+  "investment_amount": 25000,
+  "split_ratio": 0.8,
+  "reason": "분할매수 결정 이유",
+  "risk_assessment": "LOW"
+}}
+
+분할매수 기준:
+1. 거래량 급등이 클수록 더 큰 금액 투자
+2. 잔고의 60-80% 내에서 결정
+3. 남은 포지션 슬롯을 고려한 분산 투자
+4. 변동성이 높으면 작은 금액으로 시작
+
+JSON만 출력하세요.
+            """
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # JSON 부분 추출
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            
+            import json
+            result = json.loads(response_text)
+            
+            # 안전 검증
+            investment_amount = min(result.get('investment_amount', 30000), available_balance * 0.8)
+            investment_amount = max(investment_amount, 10000)  # 최소 1만원
+            
+            result['investment_amount'] = investment_amount
+            logger.info(f"Gemini 분할매수 분석: {investment_amount:,.0f}원 ({result.get('split_ratio', 1.0):.1f} 비율)")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"분할매수 AI 분석 실패: {e}")
+            return {
+                "investment_amount": min(30000, krw_balance * 0.7),
+                "reason": "AI 분석 실패로 기본 금액 사용",
+                "split_ratio": 0.7,
+                "risk_assessment": "MEDIUM"
+            }
+    
+    def analyze_position_swap(self, losing_positions: List[Dict], market_opportunities: List[Dict]) -> Dict[str, any]:
+        """손절매수 전환 분석 - 마이너스 포지션을 더 나은 종목으로 교체"""
+        if not self.enabled:
+            return {
+                "should_swap": False,
+                "reason": "AI 분석 비활성화",
+                "sell_market": None,
+                "buy_market": None
+            }
+        
+        if not losing_positions or not market_opportunities:
+            return {
+                "should_swap": False,
+                "reason": "손실 포지션이나 매수 기회가 없음",
+                "sell_market": None,
+                "buy_market": None
+            }
+        
+        try:
+            # 손실 포지션 정보 정리
+            losing_info = []
+            for pos in losing_positions:
+                days_held = (datetime.now() - datetime.fromisoformat(pos['entry_time'])).days
+                losing_info.append(
+                    f"- {pos['market']}: 손실률 {pos['pnl_rate']:.2f}%, "
+                    f"보유 {days_held}일, 손실액 {pos['pnl']:,.0f}원"
+                )
+            
+            # 매수 기회 정리
+            opportunity_info = []
+            for opp in market_opportunities[:3]:
+                opportunity_info.append(
+                    f"- {opp['market']}: 거래량 {opp.get('volume_ratio', 2.0):.1f}배, "
+                    f"가격변동 {opp['price_change']:+.2f}%"
+                )
+            
+            prompt = f"""
+암호화폐 포지션 최적화 전문가로서 손절 후 재투자 여부를 결정해주세요.
+
+**현재 손실 포지션들:**
+{chr(10).join(losing_info)}
+
+**새로운 매수 기회들:**
+{chr(10).join(opportunity_info)}
+
+다음 JSON 형식으로만 응답해주세요:
+{{
+  "should_swap": true,
+  "sell_market": "KRW-BTC",
+  "buy_market": "KRW-ETH",
+  "confidence": 8,
+  "reason": "포지션 교체 결정 이유",
+  "expected_recovery_days": 3
+}}
+
+판단 기준:
+1. 손실 포지션이 1일 이상 보유되고 -5% 이상 손실
+2. 새로운 기회의 상승 가능성이 현재 포지션보다 높음
+3. 거래량 급등 강도와 기술적 지표 고려
+4. 손절 손실보다 새 투자 수익 예상이 클 때만 교체
+
+교체하지 않으면 should_swap: false로 설정하세요.
+JSON만 출력하세요.
+            """
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # JSON 부분 추출
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            
+            import json
+            result = json.loads(response_text)
+            
+            logger.info(f"Gemini 포지션 교체 분석: {result.get('should_swap', False)} - {result.get('reason', '')}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"포지션 교체 AI 분석 실패: {e}")
+            return {
+                "should_swap": False,
+                "reason": "AI 분석 실패",
+                "sell_market": None,
+                "buy_market": None
+            }
 
 class CoinButler:
     """코인 자동매매 봇 메인 클래스"""
@@ -157,7 +334,7 @@ class CoinButler:
         self.ai_analyzer = AIAnalyzer(gemini_key) if gemini_key else None
         
         # 설정값 로드
-        self.investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 100000))
+        self.investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 30000))
         self.profit_rate = float(os.getenv('PROFIT_RATE', 0.03))
         self.loss_rate = float(os.getenv('LOSS_RATE', -0.02))
         self.volume_spike_threshold = float(os.getenv('VOLUME_SPIKE_THRESHOLD', 2.0))
@@ -252,8 +429,9 @@ class CoinButler:
             self.stop()
     
     def _manage_positions(self):
-        """기존 포지션 관리 (매도 조건 체크)"""
+        """기존 포지션 관리 (매도 조건 체크 및 포지션 교체 분석)"""
         open_positions = self.risk_manager.get_open_positions()
+        losing_positions = []  # 손실 포지션 수집
         
         for market, position in open_positions.items():
             try:
@@ -275,8 +453,39 @@ class CoinButler:
                         pnl, pnl_rate = pnl_info
                         logger.info(f"{market} 현재 손익: {pnl:,.0f}원 ({pnl_rate:+.2f}%)")
                         
+                        # 손실 포지션 수집 (포지션 교체 분석용)
+                        if pnl_rate < -5.0:  # -5% 이상 손실
+                            entry_time = position.get('entry_time', datetime.now().isoformat())
+                            try:
+                                days_held = (datetime.now() - datetime.fromisoformat(entry_time)).days
+                                if days_held >= 1:  # 1일 이상 보유
+                                    losing_positions.append({
+                                        'market': market,
+                                        'entry_price': position['entry_price'],
+                                        'current_price': current_price,
+                                        'pnl_rate': pnl_rate,
+                                        'pnl': pnl,
+                                        'entry_time': entry_time,
+                                        'days_held': days_held,
+                                        'position': position
+                                    })
+                            except:
+                                pass  # 날짜 파싱 실패시 스킵
+                        
             except Exception as e:
                 logger.error(f"포지션 관리 오류 ({market}): {e}")
+        
+        # 손실 포지션이 있고 AI가 활성화된 경우 교체 분석 (5분마다만)
+        if (losing_positions and 
+            self.ai_analyzer and 
+            self.ai_analyzer.enabled and 
+            hasattr(self, 'last_swap_check') and
+            datetime.now() - self.last_swap_check > timedelta(minutes=5)):
+            
+            self._analyze_position_swap(losing_positions)
+            self.last_swap_check = datetime.now()
+        elif not hasattr(self, 'last_swap_check'):
+            self.last_swap_check = datetime.now()
     
     def _check_balance_status(self):
         """잔고 상태 체크 및 정보 제공"""
@@ -442,20 +651,39 @@ class CoinButler:
             logger.error(f"매수 기회 탐색 오류: {e}")
     
     def _execute_buy(self, candidate: Dict):
-        """매수 실행"""
+        """매수 실행 (분할매수 지원)"""
         market = candidate['market']
         current_price = candidate['current_price']
         
         try:
             # 현재 잔고 확인
             krw_balance = self.upbit_api.get_krw_balance()
-            if krw_balance < self.investment_amount:
-                logger.warning(f"💰 잔고 부족으로 매수 스킵: {market} (현재: {krw_balance:,.0f}원, 필요: {self.investment_amount:,.0f}원)")
-                logger.info(f"💡 {self.investment_amount - krw_balance:,.0f}원 더 필요합니다.")
+            if krw_balance < 30000:  # 최소 잔고 확인
+                logger.warning(f"💰 잔고 부족으로 매수 스킵: {market} (현재: {krw_balance:,.0f}원, 필요: 30,000원 이상)")
+                return
+            
+            # AI 분할매수 분석
+            open_positions = self.risk_manager.get_open_positions()
+            current_positions = len(open_positions)
+            
+            if self.ai_analyzer and self.ai_analyzer.enabled:
+                amount_analysis = self.ai_analyzer.analyze_position_amount(
+                    candidate, krw_balance, current_positions, self.risk_manager.max_positions
+                )
+                investment_amount = amount_analysis['investment_amount']
+                logger.info(f"🤖 AI 분할매수 결정: {investment_amount:,.0f}원 - {amount_analysis['reason']}")
+            else:
+                # AI가 없는 경우 기본 로직
+                investment_amount = min(self.investment_amount, krw_balance * 0.8)
+                logger.info(f"💰 기본 매수 금액: {investment_amount:,.0f}원")
+            
+            # 최종 잔고 체크
+            if krw_balance < investment_amount:
+                logger.warning(f"💰 잔고 부족으로 매수 스킵: {market} (현재: {krw_balance:,.0f}원, 필요: {investment_amount:,.0f}원)")
                 return
             
             # 매수 주문 실행
-            order_result = self.upbit_api.place_buy_order(market, self.investment_amount)
+            order_result = self.upbit_api.place_buy_order(market, investment_amount)
             if not order_result:
                 logger.error(f"매수 주문 실패: {market}")
                 return
@@ -470,19 +698,23 @@ class CoinButler:
                 avg_price = float(order_info.get('avg_price', current_price))
                 
                 if executed_volume > 0:
-                    # 포지션 추가
+                    # 포지션 추가 (실제 투자된 금액 사용)
+                    actual_investment = executed_volume * avg_price
                     success = self.risk_manager.add_position(
                         market=market,
                         entry_price=avg_price,
                         quantity=executed_volume,
-                        investment_amount=self.investment_amount
+                        investment_amount=actual_investment
                     )
                     
                     if success:
                         # 매수 알림
-                        reason = f"거래량 {candidate.get('volume_ratio', 0):.1f}배 급등"
-                        notify_buy(market, avg_price, self.investment_amount, reason)
-                        logger.info(f"✅ 매수 완료: {market}, 가격: {avg_price:,.0f}, 수량: {executed_volume}")
+                        if self.ai_analyzer and self.ai_analyzer.enabled:
+                            reason = f"AI 분할매수 {investment_amount:,.0f}원 (거래량 {candidate.get('volume_ratio', 0):.1f}배)"
+                        else:
+                            reason = f"거래량 {candidate.get('volume_ratio', 0):.1f}배 급등"
+                        notify_buy(market, avg_price, actual_investment, reason)
+                        logger.info(f"✅ 매수 완료: {market}, 가격: {avg_price:,.0f}, 수량: {executed_volume}, 실제투자: {actual_investment:,.0f}원")
                     else:
                         logger.error(f"포지션 추가 실패: {market}")
                 else:
@@ -544,6 +776,93 @@ class CoinButler:
             'daily_pnl': self.risk_manager.get_daily_pnl(),
             'trading_stats': self.risk_manager.get_trading_stats()
         }
+    
+    def _analyze_position_swap(self, losing_positions: List[Dict]):
+        """포지션 교체 분석 및 실행"""
+        try:
+            # 새로운 매수 기회 탐색
+            markets = get_tradeable_markets()
+            if not markets:
+                return
+            
+            opportunities = []
+            for market in markets[:15]:  # 상위 15개 시장만 확인
+                try:
+                    # 현재 보유중인 종목은 제외
+                    current_positions = self.risk_manager.get_open_positions()
+                    if market in current_positions:
+                        continue
+                    
+                    current_price = get_current_price(market)
+                    candle_data = get_candles(market, count=10)
+                    if not current_price or not candle_data:
+                        continue
+                    
+                    # 거래량 급등 확인
+                    latest_volume = candle_data[0]['candle_acc_trade_volume']
+                    avg_volume = sum(c['candle_acc_trade_volume'] for c in candle_data[1:6]) / 5
+                    volume_ratio = latest_volume / avg_volume if avg_volume > 0 else 1
+                    
+                    price_change = get_price_change(market)
+                    
+                    if volume_ratio >= 2.0:  # 거래량 2배 이상 증가
+                        opportunities.append({
+                            'market': market,
+                            'current_price': current_price,
+                            'volume_ratio': volume_ratio,
+                            'price_change': price_change or 0
+                        })
+                except Exception as e:
+                    logger.debug(f"시장 데이터 조회 실패 ({market}): {e}")
+                    continue
+            
+            if not opportunities:
+                logger.info("📊 포지션 교체 기회 없음 - 새로운 매수 기회가 부족")
+                return
+            
+            logger.info(f"🔍 포지션 교체 분석 중: 손실 포지션 {len(losing_positions)}개, 매수 기회 {len(opportunities)}개")
+            
+            # AI 포지션 교체 분석
+            swap_analysis = self.ai_analyzer.analyze_position_swap(losing_positions, opportunities)
+            
+            if (swap_analysis.get('should_swap') and 
+                swap_analysis.get('sell_market') and 
+                swap_analysis.get('buy_market')):
+                
+                sell_market = swap_analysis['sell_market']
+                buy_market = swap_analysis['buy_market']
+                confidence = swap_analysis.get('confidence', 5)
+                
+                logger.info(f"🔄 AI 포지션 교체 결정 (신뢰도: {confidence}/10)")
+                logger.info(f"📤 매도: {sell_market}")
+                logger.info(f"📥 매수: {buy_market}")
+                logger.info(f"💡 이유: {swap_analysis['reason']}")
+                
+                # 해당 손실 포지션 찾기
+                sell_position = next((pos for pos in losing_positions if pos['market'] == sell_market), None)
+                buy_opportunity = next((opp for opp in opportunities if opp['market'] == buy_market), None)
+                
+                if sell_position and buy_opportunity and confidence >= 6:  # 신뢰도 6 이상만 실행
+                    # 손절매 실행
+                    logger.info(f"🔸 손절매 실행: {sell_market}")
+                    self._execute_sell(sell_market, sell_position['current_price'], 
+                                     f"AI 포지션 교체 (손절, 신뢰도: {confidence})")
+                    
+                    # 잠시 대기 후 새로운 종목 매수
+                    time.sleep(3)
+                    logger.info(f"🔹 신규 매수 실행: {buy_market}")
+                    self._execute_buy(buy_opportunity)
+                    
+                    logger.info(f"🎯 포지션 교체 완료: {sell_market} → {buy_market}")
+                else:
+                    logger.info(f"⚠️ 포지션 교체 취소: 신뢰도 부족 또는 종목 정보 오류 (신뢰도: {confidence})")
+            else:
+                logger.info("📊 AI 분석 결과: 포지션 교체 불필요")
+                if swap_analysis.get('reason'):
+                    logger.info(f"💡 이유: {swap_analysis['reason']}")
+                    
+        except Exception as e:
+            logger.error(f"포지션 교체 분석 오류: {e}")
 
 # 전역 봇 인스턴스
 _bot: Optional[CoinButler] = None

@@ -219,7 +219,7 @@ def main():
         # 거래 설정 정보
         st.subheader("⚙️ 거래 설정")
         
-        investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 100000))
+        investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 30000))
         profit_rate = float(os.getenv('PROFIT_RATE', 0.03))
         loss_rate = float(os.getenv('LOSS_RATE', -0.02))
         daily_loss_limit = float(os.getenv('DAILY_LOSS_LIMIT', -50000))
@@ -272,7 +272,7 @@ def main():
         st.metric(
             label="📊 일일 손익",
             value=format_currency(daily_pnl),
-            delta=format_percentage((daily_pnl / 100000) * 100) if daily_pnl != 0 else None,
+            delta=format_percentage((daily_pnl / 30000) * 100) if daily_pnl != 0 else None,
             delta_color=pnl_color
         )
     
@@ -314,8 +314,8 @@ def show_realtime_status(system_status, risk_manager):
     st.subheader("📊 실시간 거래 현황")
     
     # 현재 포지션 요약
-    positions_info = system_status['positions']
-    positions_data = positions_info['positions']
+    positions_info = system_status.get('positions', {})
+    positions_data = positions_info.get('positions', {})
     
     # 포지션 요약 계산
     total_investment = 0
@@ -323,31 +323,47 @@ def show_realtime_status(system_status, risk_manager):
     total_pnl = 0
     
     for market, pos_info in positions_data.items():
-        if pos_info['current_price'] > 0:
-            total_investment += pos_info['investment_amount']
-            total_current_value += pos_info['current_value']
-            total_pnl += pos_info['pnl']
+        if pos_info.get('current_price', 0) > 0:
+            total_investment += pos_info.get('investment_amount', 0)
+            total_current_value += pos_info.get('current_value', 0)
+            total_pnl += pos_info.get('pnl', 0)
     
-    # 상단 포지션 요약
+    # 계정 정보 섹션 (항상 표시)
+    st.subheader("💰 계정 현황")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        krw_balance = system_status.get('krw_balance', 0)
+        st.metric("KRW 잔고", format_currency(krw_balance))
+    
+    with col2:
+        daily_pnl = system_status.get('daily_pnl', 0)
+        pnl_color = "normal" if daily_pnl >= 0 else "inverse"
+        st.metric("오늘 실현손익", format_currency(daily_pnl), delta_color=pnl_color)
+    
+    with col3:
+        total_positions = positions_info.get('total_positions', 0)
+        max_positions = positions_info.get('max_positions', 3)
+        st.metric("보유 포지션", f"{total_positions}/{max_positions}개")
+    
+    with col4:
+        if total_investment > 0:
+            total_pnl_rate = (total_pnl / total_investment * 100)
+            st.metric("미실현 손익", format_currency(total_pnl), f"{total_pnl_rate:+.2f}%")
+        else:
+            st.metric("미실현 손익", "0원", "0.00%")
+    
+    # 포지션이 있는 경우 추가 요약 정보
     if positions_data:
         st.subheader("💼 포지션 요약")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             st.metric("총 투자금액", format_currency(total_investment))
         with col2:
             st.metric("현재 가치", format_currency(total_current_value))
         with col3:
-            pnl_color = "normal" if total_pnl >= 0 else "inverse"
-            pnl_rate = (total_pnl / total_investment * 100) if total_investment > 0 else 0
-            st.metric(
-                "미실현 손익",
-                format_currency(total_pnl),
-                f"{pnl_rate:+.2f}%",
-                delta_color=pnl_color
-            )
-        with col4:
-            available_balance = system_status['krw_balance']
+            available_balance = system_status.get('krw_balance', 0)
             st.metric("사용 가능 잔고", format_currency(available_balance))
     
     st.markdown("---")
@@ -407,7 +423,7 @@ def show_realtime_status(system_status, risk_manager):
         st.info(f"**보유 포지션:** {position_status}")
     
     with col2:
-        investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 100000))
+        investment_amount = float(os.getenv('INVESTMENT_AMOUNT', 30000))
         can_trade = "가능" if system_status['krw_balance'] >= investment_amount else "불가능"
         st.info(f"**신규 매수:** {can_trade}")
     
