@@ -322,11 +322,12 @@ def show_realtime_status(system_status, risk_manager):
     total_current_value = 0
     total_pnl = 0
     
-    for market, pos_info in positions_data.items():
-        if pos_info.get('current_price', 0) > 0:
-            total_investment += pos_info.get('investment_amount', 0)
-            total_current_value += pos_info.get('current_value', 0)
-            total_pnl += pos_info.get('pnl', 0)
+    if positions_data:  # 포지션 데이터가 있는 경우에만
+        for market, pos_info in positions_data.items():
+            if isinstance(pos_info, dict) and pos_info.get('current_price', 0) > 0:
+                total_investment += pos_info.get('investment_amount', 0)
+                total_current_value += pos_info.get('current_value', 0)
+                total_pnl += pos_info.get('pnl', 0)
     
     # 계정 정보 섹션 (항상 표시)
     st.subheader("💰 계정 현황")
@@ -458,11 +459,23 @@ def show_positions(system_status, risk_manager):
     """보유 종목 상세 정보 탭"""
     st.subheader("💼 보유 종목 현황")
     
-    positions = system_status['positions']['positions']
+    positions_info = system_status.get('positions', {})
+    positions = positions_info.get('positions', {})
     
     if not positions:
         st.info("🔍 현재 보유 중인 종목이 없습니다.")
         st.write("새로운 거래 기회를 기다리고 있습니다.")
+        
+        # 시스템 정보 표시
+        st.subheader("📊 시스템 정보")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("KRW 잔고", format_currency(system_status.get('krw_balance', 0)))
+        with col2:
+            max_positions = positions_info.get('max_positions', 3)
+            st.metric("최대 포지션", f"0/{max_positions}개")
+        with col3:
+            st.metric("사용 가능 슬롯", f"{max_positions}개")
         return
     
     # 전체 포지션 요약 (상단)
@@ -619,8 +632,9 @@ def show_trading_history():
         # CSV 파일에서 거래 내역 로드
         df = pd.read_csv("trade_history.csv")
         
-        if df.empty:
-            st.info("거래 내역이 없습니다.")
+        if df.empty or len(df) <= 1:  # 헤더만 있는 경우도 체크
+            st.info("📝 아직 거래 내역이 없습니다.")
+            st.write("봇이 시작되면 이곳에 거래 내역이 표시됩니다.")
             return
         
         # 최근 거래부터 표시
@@ -693,9 +707,11 @@ def show_trading_history():
                 st.metric("평균 손익", format_currency(total_profit / total_trades))
         
     except FileNotFoundError:
-        st.info("거래 내역 파일이 없습니다.")
+        st.info("📝 거래 내역 파일이 없습니다.")
+        st.write("봇이 시작되면 자동으로 거래 내역 파일이 생성됩니다.")
     except Exception as e:
         st.error(f"거래 내역 로드 오류: {e}")
+        st.write("오류가 발생했지만 봇 동작에는 영향을 주지 않습니다.")
 
 if __name__ == "__main__":
     main()

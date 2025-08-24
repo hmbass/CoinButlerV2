@@ -1,0 +1,16 @@
+{
+  "KRW-BTC": {
+    "entry_price": 95000000,
+    "quantity": 0.0003,
+    "investment_amount": 30000,
+    "entry_time": "2024-12-28T14:30:00",
+    "status": "open"
+  },
+  "KRW-ETH": {
+    "entry_price": 2800000,
+    "quantity": 0.01,
+    "investment_amount": 30000,
+    "entry_time": "2024-12-28T15:45:00", 
+    "status": "open"
+  }
+}
