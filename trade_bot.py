@@ -54,7 +54,7 @@ class AIAnalyzer:
             self.enabled = False
         
     def analyze_market_condition(self, market_data: List[Dict]) -> Dict[str, any]:
-        """시장 상황을 분석하여 매수할 종목 추천"""
+        """시장 상황을 분석하여 매수할 종목 추천 (고도화된 분석)"""
         if not self.enabled:
             logger.info("Gemini API 키가 없어서 AI 분석을 건너뜁니다.")
             return {
@@ -65,37 +65,17 @@ class AIAnalyzer:
             }
         
         try:
-            # 거래량 급등 종목들의 정보를 텍스트로 정리
-            market_info = []
-            for data in market_data[:3]:  # 상위 3개만 분석 (Gemini는 더 관대함)
-                market_info.append(
-                    f"- {data['market']}: 거래량 {data.get('volume_ratio', 2.0):.1f}배 증가, "
-                    f"가격변동 {data['price_change']:+.2f}%, 현재가 {data['current_price']:,.0f}원"
-                )
+            # 시장 전체 상황 수집
+            market_context = self._get_market_context()
             
-            market_text = "\n".join(market_info)
+            # 종목별 상세 분석 데이터 준비
+            detailed_analysis = []
+            for data in market_data[:3]:  # 상위 3개 분석
+                analysis = self._get_detailed_coin_analysis(data)
+                detailed_analysis.append(analysis)
             
-            prompt = f"""
-암호화폐 거래 전문가로서 다음 거래량 급등 종목들을 분석하고 가장 매수하기 좋은 1개를 추천해주세요:
-
-{market_text}
-
-다음 JSON 형식으로만 응답해주세요:
-{{
-  "recommended_coin": "BTC",
-  "confidence": 8,
-  "reason": "추천 이유를 한 줄로",
-  "risk_level": "LOW"
-}}
-
-기준:
-1. 거래량 증가의 지속성
-2. 기술적 분석 상승 여력  
-3. 리스크 대비 수익성
-4. 현재 시장 상황
-
-JSON만 출력하세요.
-            """
+            # 고도화된 프롬프트 생성
+            prompt = self._create_advanced_prompt(market_context, detailed_analysis)
             
             response = self.model.generate_content(prompt)
             response_text = response.text.strip()
@@ -107,41 +87,446 @@ JSON만 출력하세요.
                 response_text = response_text[json_start:json_end].strip()
             elif "```" in response_text:
                 json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
+                json_end = response_text.rfind("```")
                 response_text = response_text[json_start:json_end].strip()
             
             # JSON 파싱
-            import json
             result = json.loads(response_text)
-            logger.info(f"Gemini AI 분석 결과: {result}")
             
+            # 신뢰도가 낮으면 fallback 모델 사용
+            if result.get('confidence', 0) < 6:
+                logger.warning(f"낮은 신뢰도({result.get('confidence')}) - fallback 모델 시도")
+                fallback_result = self._analyze_with_fallback_model(market_context, detailed_analysis)
+                if fallback_result.get('confidence', 0) > result.get('confidence', 0):
+                    result = fallback_result
+            
+            logger.info(f"AI 분석 완료: {result.get('recommended_coin')} (신뢰도: {result.get('confidence')})")
             return result
             
-        except genai.types.BrokenResponseError as e:
-            logger.error(f"Gemini AI 응답 파싱 오류: {e}")
-            return {
-                "recommended_coin": None,
-                "confidence": 0,
-                "reason": "AI 응답 파싱 실패",
-                "risk_level": "HIGH"
-            }
+        except json.JSONDecodeError as e:
+            logger.error(f"AI 응답 JSON 파싱 오류: {e}")
+            logger.debug(f"응답 내용: {response_text}")
+            return self._get_fallback_recommendation(market_data)
         except Exception as e:
-            logger.error(f"Gemini AI 분석 실패: {e}")
-            # 첫 번째 종목을 기본값으로 반환
-            if market_data:
-                first_coin = market_data[0]['market'].replace('KRW-', '')
-                return {
-                    "recommended_coin": first_coin,
-                    "confidence": 5,
-                    "reason": "AI 분석 실패로 첫 번째 종목 선택",
-                    "risk_level": "MEDIUM"
-                }
+            logger.error(f"AI 분석 오류: {e}")
+            return self._get_fallback_recommendation(market_data)
+    
+    def _get_market_context(self) -> Dict:
+        """전체 시장 상황 분석"""
+        try:
+            upbit_api = self.model._upbit_api if hasattr(self.model, '_upbit_api') else None
+            if not upbit_api:
+                from trade_utils import UpbitAPI
+                upbit_api = UpbitAPI()
+            
+            # BTC 도미넌스 및 주요 지표 수집
+            btc_price = upbit_api.get_current_price("KRW-BTC")
+            eth_price = upbit_api.get_current_price("KRW-ETH")
+            
+            # 시장 심리 지표 (Fear & Greed Index 대용)
+            recent_candles = upbit_api.get_candles("KRW-BTC", count=24)  # 24시간 데이터
+            if recent_candles and len(recent_candles) >= 10:
+                prices = [float(candle['trade_price']) for candle in recent_candles[:10]]
+                volatility = (max(prices) - min(prices)) / min(prices) * 100
+                
+                # 간단한 RSI 계산
+                gains = []
+                losses = []
+                for i in range(1, len(prices)):
+                    change = prices[i] - prices[i-1]
+                    if change > 0:
+                        gains.append(change)
+                        losses.append(0)
+                    else:
+                        gains.append(0)
+                        losses.append(abs(change))
+                
+                avg_gain = sum(gains[-14:]) / 14 if len(gains) >= 14 else sum(gains) / len(gains) if gains else 0
+                avg_loss = sum(losses[-14:]) / 14 if len(losses) >= 14 else sum(losses) / len(losses) if losses else 0
+                rsi = 100 - (100 / (1 + (avg_gain / avg_loss))) if avg_loss > 0 else 50
+            else:
+                volatility = 0
+                rsi = 50
+            
+            return {
+                "btc_price": btc_price or 0,
+                "eth_price": eth_price or 0,
+                "market_volatility": volatility,
+                "btc_rsi": rsi,
+                "market_sentiment": "NEUTRAL" if 40 <= rsi <= 60 else ("BULLISH" if rsi > 60 else "BEARISH"),
+                "analysis_time": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"시장 컨텍스트 수집 오류: {e}")
+            return {
+                "btc_price": 0,
+                "eth_price": 0,
+                "market_volatility": 5.0,
+                "btc_rsi": 50,
+                "market_sentiment": "NEUTRAL",
+                "analysis_time": datetime.now().isoformat()
+            }
+    
+    def _get_detailed_coin_analysis(self, data: Dict) -> Dict:
+        """개별 코인의 상세 기술적 분석"""
+        try:
+            from trade_utils import UpbitAPI
+            upbit_api = UpbitAPI()
+            
+            market = data['market']
+            
+            # 더 많은 캔들 데이터 수집 (5분봉 100개 = 약 8시간)
+            candles = upbit_api.get_candles(market, count=100, interval=5)
+            if not candles or len(candles) < 20:
+                return self._get_basic_analysis(data)
+            
+            # 가격 데이터 추출
+            prices = [float(candle['trade_price']) for candle in candles]
+            volumes = [float(candle['candle_acc_trade_volume']) for candle in candles]
+            highs = [float(candle['high_price']) for candle in candles]
+            lows = [float(candle['low_price']) for candle in candles]
+            
+            # 기술적 지표 계산
+            analysis = {
+                "market": market,
+                "current_price": data['current_price'],
+                "volume_ratio": data.get('volume_ratio', 1.0),
+                "price_change": data['price_change'],
+            }
+            
+            # RSI 계산 (14기간)
+            rsi = self._calculate_rsi(prices, 14)
+            analysis["rsi"] = rsi
+            analysis["rsi_signal"] = "BUY" if rsi < 30 else ("SELL" if rsi > 70 else "HOLD")
+            
+            # MACD 계산 (12, 26, 9)
+            if len(prices) >= 26:
+                macd_line, signal_line, histogram = self._calculate_macd(prices, 12, 26, 9)
+                analysis["macd_line"] = macd_line
+                analysis["macd_signal"] = signal_line
+                analysis["macd_histogram"] = histogram
+                analysis["macd_trend"] = "BULLISH" if macd_line > signal_line else "BEARISH"
+                analysis["macd_signal_strength"] = "STRONG" if abs(histogram) > abs(macd_line) * 0.1 else "WEAK"
+            
+            # 스토캐스틱 (14, 3, 3)
+            if len(highs) >= 14 and len(lows) >= 14:
+                k_percent, d_percent = self._calculate_stochastic(highs, lows, prices, 14, 3)
+                analysis["stoch_k"] = k_percent
+                analysis["stoch_d"] = d_percent
+                analysis["stoch_signal"] = "BUY" if k_percent < 20 and d_percent < 20 else ("SELL" if k_percent > 80 and d_percent > 80 else "HOLD")
+            
+            # 이동평균선 분석 (5, 20, 60)
+            ma5 = sum(prices[:5]) / 5
+            ma20 = sum(prices[:20]) / 20 if len(prices) >= 20 else ma5
+            ma60 = sum(prices[:60]) / 60 if len(prices) >= 60 else ma20
+            
+            current_price = prices[0]
+            analysis["ma5"] = ma5
+            analysis["ma20"] = ma20  
+            analysis["ma60"] = ma60
+            analysis["ma_trend"] = "BULLISH" if current_price > ma5 > ma20 else ("BEARISH" if current_price < ma5 < ma20 else "SIDEWAYS")
+            
+            # 볼린저 밴드 (20기간)
+            if len(prices) >= 20:
+                bb_middle = ma20
+                std_dev = (sum([(p - bb_middle) ** 2 for p in prices[:20]]) / 20) ** 0.5
+                bb_upper = bb_middle + (2 * std_dev)
+                bb_lower = bb_middle - (2 * std_dev)
+                
+                analysis["bb_upper"] = bb_upper
+                analysis["bb_lower"] = bb_lower
+                analysis["bb_position"] = "UPPER" if current_price > bb_upper else ("LOWER" if current_price < bb_lower else "MIDDLE")
+            
+            # 거래량 분석
+            recent_volume = sum(volumes[:5]) / 5
+            avg_volume = sum(volumes) / len(volumes)
+            analysis["volume_trend"] = "HIGH" if recent_volume > avg_volume * 1.5 else ("LOW" if recent_volume < avg_volume * 0.5 else "NORMAL")
+            
+            # 변동성 분석
+            price_volatility = (max(prices[:24]) - min(prices[:24])) / min(prices[:24]) * 100 if len(prices) >= 24 else 0
+            analysis["volatility"] = price_volatility
+            analysis["volatility_level"] = "HIGH" if price_volatility > 10 else ("LOW" if price_volatility < 3 else "MEDIUM")
+            
+            # 지지/저항선 분석
+            recent_highs = sorted(highs[:20], reverse=True)[:3]
+            recent_lows = sorted(lows[:20])[:3]
+            resistance = sum(recent_highs) / len(recent_highs)
+            support = sum(recent_lows) / len(recent_lows)
+            
+            analysis["resistance"] = resistance
+            analysis["support"] = support
+            analysis["price_position"] = (current_price - support) / (resistance - support) if resistance > support else 0.5
+            
+            return analysis
+            
+        except Exception as e:
+            logger.error(f"상세 분석 오류 ({data['market']}): {e}")
+            return self._get_basic_analysis(data)
+    
+    def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
+        """RSI 계산"""
+        if len(prices) < period + 1:
+            return 50.0
+        
+        gains = []
+        losses = []
+        
+        for i in range(1, len(prices)):
+            change = prices[i-1] - prices[i]  # 최신이 앞에 있으므로 순서 주의
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(abs(change))
+        
+        if len(gains) < period:
+            return 50.0
+            
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+        
+        if avg_loss == 0:
+            return 100.0
+            
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
+    
+    def _calculate_macd(self, prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> tuple:
+        """MACD 계산"""
+        if len(prices) < slow:
+            return 0, 0, 0
+        
+        # EMA 계산
+        def calculate_ema(data, period):
+            multiplier = 2 / (period + 1)
+            ema = [data[0]]
+            for i in range(1, len(data)):
+                ema.append((data[i] * multiplier) + (ema[-1] * (1 - multiplier)))
+            return ema
+        
+        ema_fast = calculate_ema(prices[::-1], fast)[::-1]  # 역순으로 계산 후 다시 역순
+        ema_slow = calculate_ema(prices[::-1], slow)[::-1]
+        
+        macd_line = ema_fast[0] - ema_slow[0]
+        
+        # Signal line 계산을 위한 MACD 히스토리
+        macd_history = []
+        for i in range(min(len(ema_fast), len(ema_slow), signal + 5)):
+            if i < len(ema_fast) and i < len(ema_slow):
+                macd_history.append(ema_fast[i] - ema_slow[i])
+        
+        if len(macd_history) >= signal:
+            signal_ema = calculate_ema(macd_history[::-1], signal)[::-1]
+            signal_line = signal_ema[0]
+        else:
+            signal_line = macd_line
+        
+        histogram = macd_line - signal_line
+        
+        return macd_line, signal_line, histogram
+    
+    def _calculate_stochastic(self, highs: List[float], lows: List[float], 
+                            prices: List[float], k_period: int = 14, d_period: int = 3) -> tuple:
+        """스토캐스틱 계산"""
+        if len(highs) < k_period or len(lows) < k_period or len(prices) < k_period:
+            return 50, 50
+        
+        # %K 계산
+        highest_high = max(highs[:k_period])
+        lowest_low = min(lows[:k_period])
+        current_price = prices[0]
+        
+        if highest_high == lowest_low:
+            k_percent = 50
+        else:
+            k_percent = ((current_price - lowest_low) / (highest_high - lowest_low)) * 100
+        
+        # %D 계산 (단순화된 버전)
+        k_values = []
+        for i in range(min(d_period, len(prices))):
+            if i + k_period <= len(highs):
+                period_high = max(highs[i:i+k_period])
+                period_low = min(lows[i:i+k_period])
+                if period_high != period_low:
+                    k_val = ((prices[i] - period_low) / (period_high - period_low)) * 100
+                    k_values.append(k_val)
+        
+        d_percent = sum(k_values) / len(k_values) if k_values else k_percent
+        
+        return k_percent, d_percent
+    
+    def _get_basic_analysis(self, data: Dict) -> Dict:
+        """기본 분석 정보 반환"""
+        return {
+            "market": data['market'],
+            "current_price": data['current_price'],
+            "volume_ratio": data.get('volume_ratio', 1.0),
+            "price_change": data['price_change'],
+            "rsi": 50,
+            "rsi_signal": "HOLD",
+            "macd_trend": "NEUTRAL",
+            "macd_signal_strength": "WEAK",
+            "stoch_k": 50,
+            "stoch_d": 50,
+            "stoch_signal": "HOLD",
+            "ma_trend": "SIDEWAYS",
+            "bb_position": "MIDDLE",
+            "volume_trend": "NORMAL",
+            "volatility_level": "MEDIUM",
+            "price_position": 0.5
+        }
+    
+    def _create_advanced_prompt(self, market_context: Dict, detailed_analysis: List[Dict]) -> str:
+        """고도화된 프롬프트 생성"""
+        # 시장 상황 요약
+        market_summary = f"""
+🌍 전체 시장 상황:
+- BTC 현재가: {market_context['btc_price']:,.0f}원
+- ETH 현재가: {market_context['eth_price']:,.0f}원  
+- BTC RSI: {market_context['btc_rsi']:.1f} ({market_context['market_sentiment']})
+- 시장 변동성: {market_context['market_volatility']:.1f}%
+"""
+        
+        # 종목별 상세 분석
+        coin_analysis = []
+        for analysis in detailed_analysis:
+            coin_text = f"""
+📊 {analysis['market']}:
+• 현재가: {analysis['current_price']:,.0f}원 ({analysis['price_change']:+.2f}%)
+• 거래량: {analysis['volume_ratio']:.1f}배 급등 ({analysis.get('volume_trend', 'NORMAL')})
+• RSI: {analysis.get('rsi', 50):.1f} → {analysis.get('rsi_signal', 'HOLD')} 신호
+• MACD: {analysis.get('macd_trend', 'NEUTRAL')} ({analysis.get('macd_signal_strength', 'WEAK')})
+• 스토캐스틱: K{analysis.get('stoch_k', 50):.1f}/D{analysis.get('stoch_d', 50):.1f} → {analysis.get('stoch_signal', 'HOLD')}
+• 이동평균: {analysis.get('ma_trend', 'SIDEWAYS')} 추세
+• 볼린저밴드: {analysis.get('bb_position', 'MIDDLE')} 위치
+• 변동성: {analysis.get('volatility_level', 'MEDIUM')} 수준
+• 가격위치: {analysis.get('price_position', 0.5)*100:.1f}% (지지선~저항선)
+"""
+            coin_analysis.append(coin_text)
+        
+        coins_text = "\n".join(coin_analysis)
+        
+        return f"""
+당신은 10년 경력의 암호화폐 전문 트레이더입니다. 
+다음 종합 분석을 바탕으로 가장 수익성 높은 1개 종목을 선택하여 추천하세요.
+
+{market_summary}
+
+📈 거래량 급등 후보 종목들:
+{coins_text}
+
+🎯 **중요한 선택 기준:**
+1. **리스크 vs 수익**: 급등 후 추가 상승 가능성이 높고 하락 리스크는 낮은가?
+2. **기술적 신호**: RSI, 이동평균, 볼린저밴드가 모두 매수를 지지하는가?
+3. **거래량 지속성**: 거래량 증가가 일회성이 아닌 지속적 관심인가?
+4. **시장 상관관계**: 전체 시장 흐름과 동조성이 좋은가?
+5. **진입 타이밍**: 지금이 가장 좋은 진입점인가?
+
+⚠️ **주의사항:**
+- 이미 급등한 종목의 추가 상승 여력 신중히 판단
+- RSI 70 이상이면 과매수 구간으로 위험도 높음
+- 거래량이 급증했지만 가격이 하락했다면 매도 압력 주의
+- 전체 시장이 약세면 개별 종목도 영향받을 수 있음
+
+다음 JSON 형식으로만 응답하세요:
+{{
+  "recommended_coin": "BTC",
+  "confidence": 8,
+  "reason": "구체적이고 설득력있는 이유 (기술적 근거 포함)",
+  "risk_level": "LOW",
+  "entry_strategy": "즉시매수 또는 분할매수",
+  "target_return": 5.0,
+  "stop_loss": -3.0,
+  "holding_period": "단기(1-3일) 또는 중기(1주)"
+}}
+
+신뢰도(1-10): 매우 확신할 때만 8 이상 사용
+위험도: LOW(안전), MEDIUM(보통), HIGH(위험)
+
+JSON만 출력하세요.
+        """
+    
+    def _analyze_with_fallback_model(self, market_context: Dict, detailed_analysis: List[Dict]) -> Dict:
+        """Fallback 모델로 재분석"""
+        try:
+            # 더 보수적인 gemini-1.5-pro 모델 사용
+            fallback_model = genai.GenerativeModel('gemini-1.5-pro')
+            
+            simple_prompt = f"""
+전문 트레이더 관점에서 다음 3개 종목 중 가장 안전하고 수익성 높은 1개를 선택하세요:
+
+"""
+            for analysis in detailed_analysis:
+                simple_prompt += f"• {analysis['market']}: 가격변동 {analysis['price_change']:+.2f}%, 거래량 {analysis['volume_ratio']:.1f}배, RSI {analysis.get('rsi', 50):.1f}\n"
+            
+            simple_prompt += """
+JSON으로만 응답:
+{
+  "recommended_coin": "코인명",
+  "confidence": 7,
+  "reason": "선택 이유",
+  "risk_level": "LOW"
+}
+"""
+            
+            response = fallback_model.generate_content(simple_prompt)
+            response_text = response.text.strip()
+            
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            
+            result = json.loads(response_text)
+            logger.info("Fallback 모델 분석 성공")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Fallback 모델 분석 오류: {e}")
+            return self._get_fallback_recommendation(detailed_analysis)
+    
+    def _get_fallback_recommendation(self, market_data: List[Dict]) -> Dict:
+        """최종 Fallback 추천"""
+        if not market_data:
             return {
                 "recommended_coin": None,
                 "confidence": 0,
-                "reason": "AI 분석 실패",
+                "reason": "분석할 데이터 없음",
                 "risk_level": "HIGH"
             }
+        
+        # 가장 안전한 선택: 거래량 대비 가격 변동이 적절한 것
+        best_candidate = None
+        best_score = -1
+        
+        for data in market_data:
+            # 간단한 점수 계산: 거래량 증가 + 적절한 가격 변동
+            volume_score = min(data.get('volume_ratio', 1), 5) / 5  # 최대 5배까지만 점수화
+            price_score = 1 - (abs(data['price_change']) / 20)  # 20% 변동을 기준으로 점수화
+            total_score = (volume_score + price_score) / 2
+            
+            if total_score > best_score:
+                best_score = total_score
+                best_candidate = data
+        
+        if best_candidate:
+            return {
+                "recommended_coin": best_candidate['market'].replace('KRW-', ''),
+                "confidence": max(3, int(best_score * 10)),  # 최소 3점
+                "reason": f"거래량 {best_candidate.get('volume_ratio', 1):.1f}배 증가, 가격변동 {best_candidate['price_change']:+.2f}%로 적절함",
+                "risk_level": "MEDIUM"
+            }
+        
+        return {
+            "recommended_coin": None,
+            "confidence": 0,
+            "reason": "적절한 후보 없음",
+            "risk_level": "HIGH"
+        }
     
     def analyze_position_amount(self, market_data: Dict, krw_balance: float, 
                               current_positions: int, max_positions: int) -> Dict[str, any]:
