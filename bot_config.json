@@ -1,0 +1,14 @@
+{
+  "min_balance_for_buy": 30000,
+  "investment_amount": 30000,
+  "max_positions": 3,
+  "profit_rate": 0.03,
+  "loss_rate": -0.02,
+  "volume_spike_threshold": 2.0,
+  "price_change_threshold": 0.05,
+  "check_interval": 60,
+  "market_scan_interval": 10,
+  "daily_loss_limit": -50000,
+  "ai_confidence_threshold": 6,
+  "last_updated": "2025-08-27T16:46:38.092918"
+}

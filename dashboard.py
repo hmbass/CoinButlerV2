@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 from trade_bot import get_bot
 from risk_manager import get_risk_manager
 from trade_utils import get_upbit_api
+from ai_performance_tracker import get_ai_performance_tracker
+from config_manager import get_config_manager
 
 # 환경변수 로드
 load_dotenv()
@@ -293,7 +295,7 @@ def main():
         )
     
     # 탭 생성
-    tab1, tab2, tab3 = st.tabs(["📊 대시보드", "💼 보유 종목", "📈 거래 내역"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 대시보드", "💼 보유 종목", "📈 거래 내역", "🤖 AI 성과", "⚙️ 설정"])
     
     with tab1:
         show_realtime_status(system_status, risk_manager)
@@ -303,6 +305,12 @@ def main():
     
     with tab3:
         show_trading_history()
+    
+    with tab4:
+        show_ai_performance()
+    
+    with tab5:
+        show_settings()
     
     # 자동 새로고침
     if st.session_state.auto_refresh:
@@ -712,6 +720,567 @@ def show_trading_history():
     except Exception as e:
         st.error(f"거래 내역 로드 오류: {e}")
         st.write("오류가 발생했지만 봇 동작에는 영향을 주지 않습니다.")
+
+def show_ai_performance():
+    """AI 추천 성과 표시"""
+    st.header("🤖 AI 추천 성과 분석")
+    
+    try:
+        tracker = get_ai_performance_tracker()
+        
+        # 기간 선택
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            days = st.selectbox(
+                "분석 기간",
+                [7, 14, 30, 60, 90],
+                index=2,  # 기본값: 30일
+                help="AI 추천 성과를 분석할 기간을 선택하세요"
+            )
+        
+        # 성과 지표 가져오기
+        metrics = tracker.get_performance_metrics(days)
+        
+        if metrics.total_recommendations == 0:
+            st.info("📊 아직 AI 추천 데이터가 없습니다.")
+            st.write("봇이 실행되고 AI가 추천을 시작하면 여기에 성과가 표시됩니다.")
+            return
+        
+        # 주요 성과 지표
+        st.subheader("📈 주요 성과 지표")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "총 추천 수", 
+                metrics.total_recommendations,
+                help="AI가 추천한 총 종목 수"
+            )
+        
+        with col2:
+            execution_rate = (metrics.executed_recommendations / metrics.total_recommendations * 100) if metrics.total_recommendations > 0 else 0
+            st.metric(
+                "실행률", 
+                f"{execution_rate:.1f}%",
+                delta=f"{metrics.executed_recommendations}회 실행",
+                help="AI 추천 중 실제로 매수가 실행된 비율"
+            )
+        
+        with col3:
+            success_color = "normal"
+            if metrics.success_rate >= 70:
+                success_color = "inverse"
+            elif metrics.success_rate <= 30:
+                success_color = "off"
+                
+            st.metric(
+                "성공률", 
+                f"{metrics.success_rate:.1f}%",
+                delta="수익 기준",
+                help="매수 후 수익을 낸 거래의 비율"
+            )
+        
+        with col4:
+            return_color = "normal"
+            if metrics.average_return > 2:
+                return_color = "inverse"
+            elif metrics.average_return < -2:
+                return_color = "off"
+                
+            st.metric(
+                "평균 수익률", 
+                f"{metrics.average_return:.2f}%",
+                delta=f"최고: {metrics.best_return:.2f}%",
+                help="AI 추천으로 매수한 종목들의 평균 수익률"
+            )
+        
+        # 신뢰도별 성과 분석
+        st.subheader("🎯 신뢰도별 성과")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "높은 신뢰도 (8-10)", 
+                f"{metrics.high_confidence_success_rate:.1f}%",
+                help="신뢰도 8 이상 추천의 성공률"
+            )
+        
+        with col2:
+            st.metric(
+                "중간 신뢰도 (6-7)", 
+                f"{metrics.medium_confidence_success_rate:.1f}%",
+                help="신뢰도 6-7 추천의 성공률"
+            )
+        
+        with col3:
+            st.metric(
+                "낮은 신뢰도 (1-5)", 
+                f"{metrics.low_confidence_success_rate:.1f}%",
+                help="신뢰도 5 이하 추천의 성공률"
+            )
+        
+        # 시장 상황별 성과
+        st.subheader("📊 시장 상황별 성과")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "강세장 성과", 
+                f"{metrics.bullish_market_success_rate:.1f}%",
+                help="시장이 강세일 때의 AI 추천 성공률"
+            )
+        
+        with col2:
+            st.metric(
+                "보합 성과", 
+                f"{metrics.neutral_market_success_rate:.1f}%",
+                help="시장이 보합일 때의 AI 추천 성공률"
+            )
+        
+        with col3:
+            st.metric(
+                "약세장 성과", 
+                f"{metrics.bearish_market_success_rate:.1f}%",
+                help="시장이 약세일 때의 AI 추천 성과"
+            )
+        
+        # 최근 추천 목록
+        st.subheader("📋 최근 AI 추천 내역")
+        recent_recs = tracker.get_recent_recommendations(15)
+        
+        if recent_recs:
+            df_recs = pd.DataFrame(recent_recs)
+            df_recs['timestamp'] = pd.to_datetime(df_recs['timestamp']).dt.strftime('%m-%d %H:%M')
+            df_recs['executed'] = df_recs['executed'].map({True: '✅', False: '⏳'})
+            df_recs['success'] = df_recs['success'].map({True: '🟢', False: '🔴', None: '⏳'})
+            
+            # 수익률 포맷팅
+            df_recs['actual_return'] = df_recs['actual_return'].apply(
+                lambda x: f"{x:.2f}%" if pd.notna(x) else "-"
+            )
+            
+            # 컬럼명 한글화
+            df_display = df_recs[['timestamp', 'recommended_coin', 'confidence', 'executed', 'actual_return', 'success', 'reason']].copy()
+            df_display.columns = ['시간', '추천코인', '신뢰도', '실행', '수익률', '결과', '추천이유']
+            
+            st.dataframe(
+                df_display,
+                use_container_width=True,
+                height=400
+            )
+        else:
+            st.info("아직 AI 추천 내역이 없습니다.")
+        
+        # 성과 분석 차트
+        if metrics.total_recommendations > 0:
+            st.subheader("📈 성과 분석 차트")
+            
+            # 신뢰도별 성공률 차트
+            confidence_data = {
+                '신뢰도 구간': ['높음 (8-10)', '중간 (6-7)', '낮음 (1-5)'],
+                '성공률': [
+                    metrics.high_confidence_success_rate,
+                    metrics.medium_confidence_success_rate,
+                    metrics.low_confidence_success_rate
+                ]
+            }
+            
+            fig = px.bar(
+                confidence_data, 
+                x='신뢰도 구간', 
+                y='성공률',
+                title="신뢰도별 성공률 비교",
+                color='성공률',
+                color_continuous_scale='RdYlGn'
+            )
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 시장 상황별 성과 차트
+            market_data = {
+                '시장 상황': ['강세장', '보합', '약세장'],
+                '성공률': [
+                    metrics.bullish_market_success_rate,
+                    metrics.neutral_market_success_rate,
+                    metrics.bearish_market_success_rate
+                ]
+            }
+            
+            fig2 = px.bar(
+                market_data, 
+                x='시장 상황', 
+                y='성공률',
+                title="시장 상황별 성공률 비교",
+                color='성공률',
+                color_continuous_scale='RdYlBu'
+            )
+            fig2.update_layout(height=400)
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # 성과 개선 제안
+        st.subheader("💡 성과 개선 제안")
+        
+        suggestions = []
+        
+        if metrics.high_confidence_success_rate > metrics.medium_confidence_success_rate + 10:
+            suggestions.append("🎯 높은 신뢰도 추천의 성과가 좋습니다. 신뢰도 임계값을 높이는 것을 고려해보세요.")
+        
+        if metrics.bullish_market_success_rate > metrics.bearish_market_success_rate + 20:
+            suggestions.append("📈 강세장에서의 성과가 뛰어납니다. 약세장에서는 더욱 보수적인 접근이 필요할 수 있습니다.")
+        
+        if metrics.success_rate < 50:
+            suggestions.append("⚠️ 성공률이 50% 미만입니다. AI 모델 파라미터 조정이나 추가 지표 도입을 검토해보세요.")
+        
+        if metrics.average_return < 1:
+            suggestions.append("📊 평균 수익률이 낮습니다. 수익 목표를 상향 조정하거나 손절 기준을 최적화해보세요.")
+        
+        if not suggestions:
+            suggestions.append("✅ 현재 AI 성과가 양호합니다. 지속적인 모니터링을 통해 성과를 유지하세요.")
+        
+        for suggestion in suggestions:
+            st.write(suggestion)
+        
+        # 데이터 내보내기
+        st.subheader("📤 데이터 내보내기")
+        if st.button("AI 추천 데이터 CSV 다운로드"):
+            csv_file = tracker.export_to_csv()
+            if csv_file:
+                st.success(f"✅ 데이터가 {csv_file}에 저장되었습니다.")
+            else:
+                st.error("❌ 데이터 내보내기 실패")
+        
+    except Exception as e:
+        st.error(f"AI 성과 분석 오류: {e}")
+        st.write("AI 성과 추적 시스템에 문제가 있습니다. 로그를 확인해주세요.")
+
+def show_settings():
+    """봇 설정 페이지"""
+    st.header("⚙️ 봇 설정")
+    
+    try:
+        config_manager = get_config_manager()
+        current_config = config_manager.get_all_settings()
+        
+        # 설정 변경 감지용
+        if 'config_changed' not in st.session_state:
+            st.session_state.config_changed = False
+        
+        st.info("💡 설정을 변경하면 즉시 봇에 적용됩니다. 신중하게 설정해주세요.")
+        
+        # 거래 관련 설정
+        st.subheader("💰 거래 설정")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 매수 최소 잔고 설정
+            min_balance = st.number_input(
+                "매수 최소 잔고 (원)",
+                min_value=5000,
+                max_value=1000000,
+                value=current_config['min_balance_for_buy'],
+                step=5000,
+                help="이 금액 이상일 때만 매수를 실행합니다. 현재 요청사항: 사용자 설정 가능"
+            )
+            
+            # 기본 투자 금액
+            investment_amount = st.number_input(
+                "기본 투자 금액 (원)",
+                min_value=5000,
+                max_value=1000000,
+                value=current_config['investment_amount'],
+                step=5000,
+                help="한 번에 투자할 기본 금액입니다."
+            )
+            
+            # 최대 보유 종목 수
+            max_positions = st.number_input(
+                "최대 보유 종목 수 (개)",
+                min_value=1,
+                max_value=10,
+                value=current_config['max_positions'],
+                step=1,
+                help="동시에 보유할 수 있는 최대 종목 수입니다. 현재 요청사항: 3개로 제한"
+            )
+        
+        with col2:
+            # 목표 수익률
+            profit_rate = st.number_input(
+                "목표 수익률 (%)",
+                min_value=0.1,
+                max_value=100.0,
+                value=current_config['profit_rate'] * 100,
+                step=0.1,
+                help="이 수익률에 도달하면 자동 매도합니다."
+            ) / 100
+            
+            # 손절률
+            loss_rate = st.number_input(
+                "손절률 (%)",
+                min_value=-100.0,
+                max_value=-0.1,
+                value=current_config['loss_rate'] * 100,
+                step=0.1,
+                help="이 손실률에 도달하면 자동 손절합니다."
+            ) / 100
+            
+            # 일일 손실 한도
+            daily_loss_limit = st.number_input(
+                "일일 손실 한도 (원)",
+                min_value=-1000000,
+                max_value=-1000,
+                value=current_config['daily_loss_limit'],
+                step=1000,
+                help="하루 총 손실이 이 금액을 초과하면 봇을 정지합니다."
+            )
+        
+        # 기술적 분석 설정
+        st.subheader("📊 기술적 분석 설정")
+        
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            # 거래량 급등 임계값
+            volume_spike_threshold = st.number_input(
+                "거래량 급등 임계값 (배)",
+                min_value=1.1,
+                max_value=10.0,
+                value=current_config['volume_spike_threshold'],
+                step=0.1,
+                help="평균 거래량의 몇 배 이상일 때 거래량 급등으로 판단할지 설정합니다."
+            )
+            
+            # 가격 변동 임계값
+            price_change_threshold = st.number_input(
+                "가격 변동 임계값 (%)",
+                min_value=1.0,
+                max_value=50.0,
+                value=current_config['price_change_threshold'] * 100,
+                step=0.1,
+                help="이 값을 초과하는 급격한 가격 변동은 제외합니다."
+            ) / 100
+        
+        with col4:
+            # AI 신뢰도 임계값
+            ai_confidence_threshold = st.number_input(
+                "AI 신뢰도 임계값",
+                min_value=1,
+                max_value=10,
+                value=current_config['ai_confidence_threshold'],
+                step=1,
+                help="AI 추천 신뢰도가 이 값 이상일 때만 매수를 실행합니다."
+            )
+        
+        # 시스템 설정
+        st.subheader("🔧 시스템 설정")
+        
+        col5, col6 = st.columns(2)
+        
+        with col5:
+            # 체크 간격
+            check_interval = st.number_input(
+                "체크 간격 (초)",
+                min_value=10,
+                max_value=300,
+                value=current_config['check_interval'],
+                step=10,
+                help="봇이 시장을 체크하는 주기입니다."
+            )
+        
+        with col6:
+            # 시장 스캔 간격
+            market_scan_interval = st.number_input(
+                "시장 스캔 간격 (분)",
+                min_value=1,
+                max_value=60,
+                value=current_config['market_scan_interval'],
+                step=1,
+                help="새로운 매수 기회를 찾는 주기입니다."
+            )
+        
+        # 현재 설정 vs 새 설정 비교
+        new_config = {
+            'min_balance_for_buy': min_balance,
+            'investment_amount': investment_amount,
+            'max_positions': max_positions,
+            'profit_rate': profit_rate,
+            'loss_rate': loss_rate,
+            'daily_loss_limit': daily_loss_limit,
+            'volume_spike_threshold': volume_spike_threshold,
+            'price_change_threshold': price_change_threshold,
+            'ai_confidence_threshold': ai_confidence_threshold,
+            'check_interval': check_interval,
+            'market_scan_interval': market_scan_interval
+        }
+        
+        # 변경사항 표시
+        changes = []
+        for key, new_value in new_config.items():
+            old_value = current_config[key]
+            if old_value != new_value:
+                changes.append(f"• {get_setting_display_name(key)}: {format_setting_value(old_value)} → {format_setting_value(new_value)}")
+        
+        if changes:
+            st.subheader("📝 변경사항")
+            for change in changes:
+                st.write(change)
+        
+        # 설정 저장 버튼
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+        
+        with col_btn1:
+            if st.button("💾 설정 저장", type="primary"):
+                # 유효성 검사
+                is_valid, errors = config_manager.validate_config()
+                
+                # 새 설정으로 임시 업데이트해서 검사
+                temp_config = current_config.copy()
+                temp_config.update(new_config)
+                config_manager.config = temp_config
+                is_valid, errors = config_manager.validate_config()
+                
+                if is_valid:
+                    if config_manager.update_multiple(new_config):
+                        st.success("✅ 설정이 저장되었습니다!")
+                        st.info("🔄 새로운 설정이 봇에 즉시 적용됩니다.")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("❌ 설정 저장에 실패했습니다.")
+                else:
+                    st.error("❌ 설정값에 오류가 있습니다:")
+                    for error in errors:
+                        st.write(f"• {error}")
+        
+        with col_btn2:
+            if st.button("🔄 기본값 복원"):
+                if st.session_state.get('confirm_reset', False):
+                    if config_manager.reset_to_default():
+                        st.success("✅ 기본값으로 복원되었습니다!")
+                        st.session_state.confirm_reset = False
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("❌ 기본값 복원에 실패했습니다.")
+                else:
+                    st.warning("⚠️ 정말 기본값으로 복원하시겠습니까?")
+                    st.session_state.confirm_reset = True
+        
+        with col_btn3:
+            if st.button("📄 설정 파일 보기"):
+                st.subheader("현재 설정 파일 내용")
+                st.json(current_config)
+        
+        # 설정 설명
+        st.subheader("ℹ️ 설정 가이드")
+        
+        with st.expander("💰 거래 설정 가이드"):
+            st.write("""
+            **매수 최소 잔고**: 이 금액 이상이 있을 때만 새로운 종목을 매수합니다.
+            - 추천값: 30,000 - 100,000원
+            - 너무 낮으면 소액으로 여러 번 매수될 수 있음
+            
+            **최대 보유 종목 수**: 동시에 보유할 수 있는 최대 종목 수입니다.
+            - 3개로 설정하면 3개 종목 보유 시 추가 매수 중단
+            - 매도 후에만 새로운 매수 가능
+            - 리스크 분산과 집중 투자의 균형점
+            
+            **목표 수익률**: 이 수익률 도달 시 자동 매도
+            - 추천값: 2-5%
+            - 너무 높으면 매도 기회를 놓칠 수 있음
+            
+            **손절률**: 이 손실률 도달 시 자동 손절
+            - 추천값: -1% ~ -3%
+            - 리스크 관리에 매우 중요
+            """)
+        
+        with st.expander("📊 기술적 분석 설정 가이드"):
+            st.write("""
+            **거래량 급등 임계값**: 평균 거래량 대비 몇 배 이상일 때 매수 신호로 판단
+            - 추천값: 2.0 - 3.0배
+            - 너무 낮으면 잦은 매수, 너무 높으면 기회 부족
+            
+            **AI 신뢰도 임계값**: AI 추천 신뢰도가 이 값 이상일 때만 매수
+            - 추천값: 6-8
+            - 높을수록 안전하지만 기회 감소
+            """)
+        
+        # 현재 적용된 설정 상태
+        st.subheader("📊 현재 설정 상태")
+        
+        col_status1, col_status2, col_status3, col_status4 = st.columns(4)
+        
+        with col_status1:
+            st.metric(
+                "매수 최소 잔고",
+                f"{current_config['min_balance_for_buy']:,}원",
+                help="현재 설정된 매수 최소 잔고"
+            )
+        
+        with col_status2:
+            st.metric(
+                "최대 보유 종목",
+                f"{current_config['max_positions']}개",
+                help="현재 설정된 최대 보유 종목 수"
+            )
+        
+        with col_status3:
+            st.metric(
+                "목표 수익률",
+                f"{current_config['profit_rate']*100:.1f}%",
+                help="현재 설정된 목표 수익률"
+            )
+        
+        with col_status4:
+            st.metric(
+                "손절률",
+                f"{current_config['loss_rate']*100:.1f}%",
+                help="현재 설정된 손절률"
+            )
+        
+        # 마지막 업데이트 시간
+        if 'last_updated' in current_config:
+            try:
+                last_updated = datetime.fromisoformat(current_config['last_updated'])
+                st.caption(f"마지막 업데이트: {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
+            except:
+                pass
+    
+    except Exception as e:
+        st.error(f"설정 페이지 오류: {e}")
+        st.write("설정 시스템에 문제가 있습니다. 로그를 확인해주세요.")
+
+def get_setting_display_name(key: str) -> str:
+    """설정 키를 사용자 친화적 이름으로 변환"""
+    names = {
+        'min_balance_for_buy': '매수 최소 잔고',
+        'investment_amount': '기본 투자 금액',
+        'max_positions': '최대 보유 종목 수',
+        'profit_rate': '목표 수익률',
+        'loss_rate': '손절률',
+        'daily_loss_limit': '일일 손실 한도',
+        'volume_spike_threshold': '거래량 급등 임계값',
+        'price_change_threshold': '가격 변동 임계값',
+        'ai_confidence_threshold': 'AI 신뢰도 임계값',
+        'check_interval': '체크 간격',
+        'market_scan_interval': '시장 스캔 간격'
+    }
+    return names.get(key, key)
+
+def format_setting_value(value) -> str:
+    """설정값을 사용자 친화적 형식으로 포맷"""
+    if isinstance(value, float):
+        if 0 < value < 1:
+            return f"{value*100:.1f}%"
+        else:
+            return f"{value:.2f}"
+    elif isinstance(value, int):
+        if abs(value) >= 1000:
+            return f"{value:,}"
+        else:
+            return str(value)
+    else:
+        return str(value)
 
 if __name__ == "__main__":
     main()

@@ -347,8 +347,11 @@ class RiskManager:
         except Exception as e:
             logger.error(f"일일 손익 업데이트 실패: {e}")
     
-    def check_daily_loss_limit(self) -> bool:
+    def check_daily_loss_limit(self, daily_loss_limit: float = None) -> bool:
         """일일 손실 한도 초과 확인"""
+        if daily_loss_limit is None:
+            daily_loss_limit = self.daily_loss_limit
+            
         daily_pnl = self.get_daily_pnl()
         
         # 현재 보유 포지션의 미실현 손익도 고려
@@ -360,8 +363,8 @@ class RiskManager:
         
         total_pnl = daily_pnl + unrealized_pnl
         
-        if total_pnl <= self.daily_loss_limit:
-            logger.warning(f"일일 손실 한도 초과! 현재 손익: {total_pnl:,.0f}원, 한도: {self.daily_loss_limit:,.0f}원")
+        if total_pnl <= daily_loss_limit:
+            logger.warning(f"일일 손실 한도 초과! 현재 손익: {total_pnl:,.0f}원, 한도: {daily_loss_limit:,.0f}원")
             return True
         
         return False

@@ -140,3 +140,85 @@
 2025-08-26 10:48:48,008 - __main__ - INFO - ✅ CoinButler 시스템이 중지되었습니다.
 2025-08-26 10:48:48,008 - __main__ - INFO - 🛑 CoinButler 시스템 중지 중...
 2025-08-26 10:48:48,008 - __main__ - INFO - ✅ CoinButler 시스템이 중지되었습니다.
+2025-08-27 16:22:30,926 - __main__ - INFO - ✅ 환경변수 검증 완료
+2025-08-27 16:22:30,927 - __main__ - INFO - 🚀 CoinButler 시스템 시작...
+2025-08-27 16:22:30,927 - __main__ - INFO - 🤖 트레이딩 봇 시작 중...
+2025-08-27 16:22:30,976 - __main__ - INFO - ✅ 트레이딩 봇 시작됨 (PID: 85419)
+2025-08-27 16:22:33,981 - __main__ - INFO - 📊 대시보드 시작 중...
+2025-08-27 16:22:33,984 - __main__ - INFO - ✅ 대시보드 시작됨 (PID: 85440)
+2025-08-27 16:22:33,984 - __main__ - INFO - 🌐 대시보드 URL: http://0.0.0.0:8501
+2025-08-27 16:22:33,984 - __main__ - INFO - ✅ CoinButler 시스템이 성공적으로 시작되었습니다!
+2025-08-27 16:22:39,077 - risk_manager - INFO - 파일에서 0개 포지션 복원 완료
+2025-08-27 16:22:39,270 - __main__ - INFO - 시그널 15 수신, 시스템 종료 중...
+2025-08-27 16:22:39,270 - __main__ - INFO - 🛑 CoinButler 시스템 중지 중...
+2025-08-27 16:22:39,271 - __main__ - INFO - 봇 프로세스 중지 중...
+2025-08-27 16:22:39,274 - __main__ - INFO - ✅ 봇 프로세스 중지 완료
+2025-08-27 16:22:39,274 - __main__ - INFO - ✅ CoinButler 시스템이 중지되었습니다.
+2025-08-27 16:22:39,275 - __main__ - INFO - 🛑 CoinButler 시스템 중지 중...
+2025-08-27 16:22:39,275 - __main__ - INFO - ✅ CoinButler 시스템이 중지되었습니다.
+2025-08-27 16:43:27,310 - __main__ - INFO - ✅ 환경변수 검증 완료
+2025-08-27 16:43:27,310 - __main__ - INFO - 🚀 CoinButler 시스템 시작...
+2025-08-27 16:43:27,310 - __main__ - INFO - 🤖 트레이딩 봇 시작 중...
+2025-08-27 16:43:27,344 - __main__ - INFO - ✅ 트레이딩 봇 시작됨 (PID: 88287)
+2025-08-27 16:43:30,350 - __main__ - INFO - 📊 대시보드 시작 중...
+2025-08-27 16:43:30,357 - __main__ - INFO - ✅ 대시보드 시작됨 (PID: 88304)
+2025-08-27 16:43:30,357 - __main__ - INFO - 🌐 대시보드 URL: http://0.0.0.0:8501
+2025-08-27 16:43:30,357 - __main__ - INFO - ✅ CoinButler 시스템이 성공적으로 시작되었습니다!
+2025-08-27 16:43:34,084 - risk_manager - INFO - 파일에서 0개 포지션 복원 완료
+2025-08-27 16:43:34,087 - config_manager - INFO - 설정 파일 로드 완료: bot_config.json
+2025-08-27 16:43:35,423 - notifier - INFO - 텔레그램 메시지 전송 성공
+2025-08-27 16:43:35,425 - trade_bot - INFO - 🚀 CoinButler 시작!
+2025-08-27 16:43:35,426 - trade_bot - INFO - 🔄 기존 포지션 복원 시도 중...
+2025-08-27 16:43:35,426 - trade_bot - INFO - 저장된 포지션이 없습니다.
+2025-08-27 16:43:35,426 - trade_bot - INFO - Upbit 실제 잔고와 동기화 중...
+2025-08-27 16:43:35,426 - risk_manager - INFO - Upbit API에서 실제 보유 코인 조회 중...
+2025-08-27 16:43:35,532 - trade_utils - ERROR - 계정 정보 조회 실패: 401 Client Error: Unauthorized for url: https://api.upbit.com/v1/accounts
+2025-08-27 16:43:35,537 - risk_manager - INFO - ✅ Upbit에서 0개 포지션 복원 완료
+2025-08-27 16:43:35,537 - trade_bot - INFO - 복원된 포지션이 없습니다. 새로 거래를 시작합니다.
+2025-08-27 16:43:35,596 - trade_utils - ERROR - 계정 정보 조회 실패: 401 Client Error: Unauthorized for url: https://api.upbit.com/v1/accounts
+2025-08-27 16:43:35,600 - trade_bot - INFO - 현재 KRW 잔고: 0원
+2025-08-27 16:43:35,600 - trade_bot - WARNING - ⚠️ 잔고 부족! 현재: 0원, 필요: 30,000원
+2025-08-27 16:43:35,600 - trade_bot - INFO - 잔고가 부족하지만 봇은 계속 실행됩니다. 매수는 잔고가 충분할 때만 실행됩니다.
+2025-08-27 16:43:35,659 - trade_utils - ERROR - 계정 정보 조회 실패: 401 Client Error: Unauthorized for url: https://api.upbit.com/v1/accounts
+2025-08-27 16:43:35,660 - trade_bot - WARNING - 💰 잔고 부족: 0원 (부족: 30,000원)
+2025-08-27 16:43:35,660 - trade_bot - INFO - 💡 매수를 위해 30,000원을 입금해주세요.
+2025-08-27 16:43:35,660 - trade_bot - INFO - 🔍 매수 기회 탐색 중...
+2025-08-27 16:43:35,717 - trade_bot - INFO - 상위 20개 종목 스캔 중...
+2025-08-27 16:43:35,856 - trade_utils - INFO - KRW-WAXP 거래량 비율: 5.30
+2025-08-27 16:43:36,098 - trade_bot - INFO - 거래량 급등 감지: KRW-WAXP (2.0배, -0.01%)
+2025-08-27 16:43:36,234 - trade_utils - INFO - KRW-CARV 거래량 비율: 0.01
+2025-08-27 16:43:36,358 - trade_utils - INFO - KRW-LSK 거래량 비율: 0.03
+2025-08-27 16:43:36,481 - trade_utils - INFO - KRW-BORA 거래량 비율: 0.21
+2025-08-27 16:43:36,612 - trade_utils - INFO - KRW-PUNDIX 거래량 비율: 1.84
+2025-08-27 16:43:37,683 - trade_utils - INFO - KRW-BAT 거래량 비율: 0.05
+2025-08-27 16:43:37,797 - trade_utils - INFO - KRW-HUNT 거래량 비율: 0.97
+2025-08-27 16:43:37,931 - trade_utils - INFO - KRW-PENGU 거래량 비율: 0.77
+2025-08-27 16:43:38,057 - trade_utils - INFO - KRW-FIL 거래량 비율: 0.04
+2025-08-27 16:43:38,204 - trade_utils - INFO - KRW-BEAM 거래량 비율: 0.61
+2025-08-27 16:43:39,271 - trade_utils - INFO - KRW-WAVES 거래량 비율: 8.12
+2025-08-27 16:43:39,529 - trade_bot - INFO - 거래량 급등 감지: KRW-WAVES (2.0배, +0.04%)
+2025-08-27 16:43:39,655 - trade_utils - INFO - KRW-USDC 거래량 비율: 3.38
+2025-08-27 16:43:39,904 - trade_bot - INFO - 거래량 급등 감지: KRW-USDC (2.0배, -0.00%)
+2025-08-27 16:43:40,032 - trade_utils - INFO - KRW-MOVE 거래량 비율: 1.24
+2025-08-27 16:43:40,148 - trade_utils - INFO - KRW-AERGO 거래량 비율: 0.10
+2025-08-27 16:43:40,294 - trade_utils - INFO - KRW-USDT 거래량 비율: 0.53
+2025-08-27 16:43:41,353 - trade_utils - INFO - KRW-BOUNTY 거래량 비율: 1.41
+2025-08-27 16:43:41,490 - trade_utils - INFO - KRW-KAITO 거래량 비율: 9.58
+2025-08-27 16:43:41,744 - trade_bot - INFO - 거래량 급등 감지: KRW-KAITO (2.0배, -0.01%)
+2025-08-27 16:43:41,897 - trade_utils - INFO - KRW-LPT 거래량 비율: 0.56
+2025-08-27 16:43:42,010 - trade_utils - INFO - KRW-BLAST 거래량 비율: 0.22
+2025-08-27 16:43:42,134 - trade_utils - INFO - KRW-DKA 거래량 비율: 5.34
+2025-08-27 16:43:42,388 - trade_bot - INFO - 거래량 급등 감지: KRW-DKA (2.0배, -0.00%)
+2025-08-27 16:43:42,389 - trade_bot - INFO - 거래량 급등 감지: 5개 종목
+2025-08-27 16:43:42,389 - trade_bot - INFO - AI 분석 비활성화 - 첫 번째 후보 선택
+2025-08-27 16:43:42,455 - trade_utils - ERROR - 계정 정보 조회 실패: 401 Client Error: Unauthorized for url: https://api.upbit.com/v1/accounts
+2025-08-27 16:43:42,456 - trade_bot - WARNING - 💰 잔고 부족으로 매수 스킵: KRW-WAXP (현재: 0원, 필요: 30,000원 이상)
+2025-08-27 16:46:54,471 - __main__ - INFO - 시그널 15 수신, 시스템 종료 중...
+2025-08-27 16:46:54,472 - __main__ - INFO - 🛑 CoinButler 시스템 중지 중...
+2025-08-27 16:46:54,472 - __main__ - INFO - 봇 프로세스 중지 중...
+2025-08-27 16:46:54,489 - __main__ - INFO - ✅ 봇 프로세스 중지 완료
+2025-08-27 16:46:54,489 - __main__ - INFO - 대시보드 프로세스 중지 중...
+2025-08-27 16:46:55,937 - __main__ - INFO - ✅ 대시보드 프로세스 중지 완료
+2025-08-27 16:46:55,937 - __main__ - INFO - ✅ CoinButler 시스템이 중지되었습니다.
+2025-08-27 16:46:55,937 - __main__ - INFO - 🛑 CoinButler 시스템 중지 중...
+2025-08-27 16:46:55,937 - __main__ - INFO - ✅ CoinButler 시스템이 중지되었습니다.
