@@ -151,8 +151,8 @@ class AIAnalyzer:
             btc_price = upbit_api.get_current_price("KRW-BTC")
             eth_price = upbit_api.get_current_price("KRW-ETH")
             
-            # BTC RSI 계산
-            recent_candles = upbit_api.get_candles("KRW-BTC", count=24)
+            # BTC RSI 계산  
+            recent_candles = upbit_api.get_candles("KRW-BTC", minutes=5, count=24)
             if recent_candles and len(recent_candles) >= 10:
                 prices = [float(candle['trade_price']) for candle in recent_candles[:10]]
                 volatility = (max(prices) - min(prices)) / min(prices) * 100
@@ -346,7 +346,7 @@ class AIAnalyzer:
             market = data['market']
             
             # 더 많은 캔들 데이터 수집 (5분봉 100개 = 약 8시간)
-            candles = upbit_api.get_candles(market, count=100, interval=5)
+            candles = upbit_api.get_candles(market, minutes=5, count=100)
             if not candles or len(candles) < 20:
                 return self._get_basic_analysis(data)
             
@@ -1452,8 +1452,8 @@ class CoinButler:
                     if market in current_positions:
                         continue
                     
-                    current_price = get_current_price(market)
-                    candle_data = get_candles(market, count=10)
+                    current_price = self.upbit_api.get_current_price(market)
+                    candle_data = self.upbit_api.get_candles(market, minutes=5, count=10)
                     if not current_price or not candle_data:
                         continue
                     
@@ -1462,7 +1462,7 @@ class CoinButler:
                     avg_volume = sum(c['candle_acc_trade_volume'] for c in candle_data[1:6]) / 5
                     volume_ratio = latest_volume / avg_volume if avg_volume > 0 else 1
                     
-                    price_change = get_price_change(market)
+                    price_change = self.market_analyzer.get_price_change(market)
                     
                     if volume_ratio >= 2.0:  # 거래량 2배 이상 증가
                         opportunities.append({
