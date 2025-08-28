@@ -118,6 +118,25 @@ def get_system_status():
             except:
                 pass
         
+        # 실제 업비트 계좌 정보 조회
+        upbit_api = get_upbit_api()
+        actual_upbit_balances = {}
+        try:
+            accounts = upbit_api.get_accounts()
+            for account in accounts:
+                currency = account.get('currency')
+                balance = float(account.get('balance', 0))
+                if currency != 'KRW' and balance > 0:  # 코인 잔고만 (KRW 제외)
+                    market = f"KRW-{currency}"
+                    actual_upbit_balances[market] = {
+                        'currency': currency,
+                        'balance': balance,
+                        'avg_buy_price': float(account.get('avg_buy_price', 0)),
+                        'locked': float(account.get('locked', 0))
+                    }
+        except Exception as e:
+            logger.error(f"업비트 실제 잔고 조회 실패: {e}")
+        
         # 현재 포지션 정보 (positions.json에서 읽기)
         positions_data = {}
         total_positions = 0
@@ -177,6 +196,9 @@ def get_system_status():
         except:
             krw_balance = 0
         
+        # 실제 업비트 잔고와 positions.json 동기화 분석
+        sync_status = _analyze_balance_sync(actual_upbit_balances, positions_data)
+        
         return {
             'krw_balance': krw_balance,
             'daily_pnl': daily_pnl,
@@ -186,7 +208,9 @@ def get_system_status():
                 'max_positions': int(os.getenv('MAX_POSITIONS', 3)),
                 'available_slots': int(os.getenv('MAX_POSITIONS', 3)) - total_positions,
                 'positions': positions_data
-            }
+            },
+            'actual_upbit_balances': actual_upbit_balances,  # 실제 업비트 잔고
+            'sync_status': sync_status  # 동기화 상태
         }
     except Exception as e:
         st.error(f"시스템 상태 조회 오류: {e}")
@@ -194,8 +218,186 @@ def get_system_status():
             'krw_balance': 0,
             'daily_pnl': 0,
             'trading_stats': {'total_trades': 0, 'win_rate': 0, 'total_pnl': 0},
-            'positions': {'total_positions': 0, 'max_positions': 3, 'available_slots': 3, 'positions': {}}
+            'positions': {'total_positions': 0, 'max_positions': 3, 'available_slots': 3, 'positions': {}},
+            'actual_upbit_balances': {},
+            'sync_status': {'is_synced': True, 'differences': [], 'needs_sync': False}
         }
+
+def _analyze_balance_sync(actual_upbit_balances: dict, positions_data: dict) -> dict:
+    """실제 업비트 잔고와 positions.json 동기화 상태 분석"""
+    try:
+        differences = []
+        needs_sync = False
+        
+        # positions.json에는 있지만 실제 업비트에는 없는 종목
+        for market, pos_data in positions_data.items():
+            if market not in actual_upbit_balances:
+                differences.append({
+                    'type': 'missing_in_upbit',
+                    'market': market,
+                    'description': f"{market.replace('KRW-', '')} - 봇 기록에는 있지만 실제 업비트에는 없음",
+                    'bot_amount': pos_data.get('quantity', 0),
+                    'upbit_amount': 0
+                })
+                needs_sync = True
+        
+        # 실제 업비트에는 있지만 positions.json에는 없는 종목  
+        for market, upbit_data in actual_upbit_balances.items():
+            if market not in positions_data:
+                differences.append({
+                    'type': 'missing_in_bot',
+                    'market': market,
+                    'description': f"{market.replace('KRW-', '')} - 실제 업비트에는 있지만 봇 기록에는 없음 (수동 거래 의심)",
+                    'bot_amount': 0,
+                    'upbit_amount': upbit_data['balance']
+                })
+                needs_sync = True
+        
+        # 둘 다 있지만 수량이 다른 경우
+        for market in set(positions_data.keys()) & set(actual_upbit_balances.keys()):
+            bot_quantity = positions_data[market].get('quantity', 0)
+            upbit_quantity = actual_upbit_balances[market]['balance']
+            
+            # 소량 차이는 무시 (거래 수수료 등으로 인한 차이)
+            if abs(bot_quantity - upbit_quantity) > 0.001:  # 0.001개 이상 차이
+                differences.append({
+                    'type': 'quantity_mismatch',
+                    'market': market,
+                    'description': f"{market.replace('KRW-', '')} - 수량 불일치 (부분 매도/매수 의심)",
+                    'bot_amount': bot_quantity,
+                    'upbit_amount': upbit_quantity
+                })
+                needs_sync = True
+        
+        return {
+            'is_synced': not needs_sync,
+            'differences': differences,
+            'needs_sync': needs_sync,
+            'total_differences': len(differences)
+        }
+        
+    except Exception as e:
+        logger.error(f"잔고 동기화 분석 오류: {e}")
+        return {
+            'is_synced': True,  # 오류 시 안전하게 동기화됨으로 표시
+            'differences': [],
+            'needs_sync': False,
+            'error': str(e)
+        }
+
+def _sync_with_upbit(actual_upbit_balances: dict) -> bool:
+    """실제 업비트 잔고를 기준으로 positions.json 동기화"""
+    try:
+        import json
+        from datetime import datetime
+        
+        logger.info("🔄 업비트 잔고와 동기화 시작...")
+        
+        # 현재 positions.json 읽기
+        current_positions = {}
+        if os.path.exists("positions.json"):
+            try:
+                with open("positions.json", 'r', encoding='utf-8') as f:
+                    current_positions = json.load(f)
+            except Exception as e:
+                logger.error(f"positions.json 읽기 실패: {e}")
+                current_positions = {}
+        
+        # 새로운 포지션 데이터 구성
+        new_positions = {}
+        
+        # 실제 업비트 잔고 기반으로 포지션 생성
+        for market, balance_info in actual_upbit_balances.items():
+            coin_name = market.replace('KRW-', '')
+            quantity = balance_info['balance']
+            avg_buy_price = balance_info['avg_buy_price']
+            
+            if quantity > 0.001:  # 소량은 무시
+                # 기존 positions.json에서 정보가 있으면 유지, 없으면 새로 생성
+                if market in current_positions:
+                    # 기존 데이터 유지하되 수량과 가격만 업데이트
+                    existing_pos = current_positions[market].copy()
+                    existing_pos['quantity'] = quantity
+                    existing_pos['entry_price'] = avg_buy_price if avg_buy_price > 0 else existing_pos.get('entry_price', 0)
+                    existing_pos['status'] = 'open'
+                    new_positions[market] = existing_pos
+                else:
+                    # 새로운 수동 거래로 추정되는 포지션 생성
+                    investment_amount = quantity * avg_buy_price if avg_buy_price > 0 else 30000
+                    new_positions[market] = {
+                        'market': market,
+                        'entry_price': avg_buy_price if avg_buy_price > 0 else 0,
+                        'quantity': quantity,
+                        'investment_amount': investment_amount,
+                        'buy_time': datetime.now().isoformat(),
+                        'status': 'open',
+                        'source': 'manual_sync'  # 수동 동기화로 생성됨을 표시
+                    }
+                
+                logger.info(f"🔄 동기화: {coin_name} {quantity:.6f}개")
+        
+        # 백업 파일 생성
+        backup_file = f"positions_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        try:
+            if current_positions:
+                with open(backup_file, 'w', encoding='utf-8') as f:
+                    json.dump(current_positions, f, ensure_ascii=False, indent=2)
+                logger.info(f"📋 기존 포지션 백업: {backup_file}")
+        except Exception as e:
+            logger.warning(f"백업 파일 생성 실패: {e}")
+        
+        # 새로운 positions.json 저장
+        with open("positions.json", 'w', encoding='utf-8') as f:
+            json.dump(new_positions, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"✅ 업비트 잔고 동기화 완료: {len(new_positions)}개 종목")
+        
+        # 동기화 기록을 CSV에도 추가
+        _record_manual_sync(actual_upbit_balances, new_positions)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"업비트 잔고 동기화 실패: {e}")
+        return False
+
+def _record_manual_sync(upbit_balances: dict, synced_positions: dict):
+    """수동 동기화 기록을 trade_history.csv에 추가"""
+    try:
+        import pandas as pd
+        from datetime import datetime
+        
+        sync_records = []
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        for market, balance_info in upbit_balances.items():
+            coin_name = market.replace('KRW-', '')
+            sync_records.append({
+                'timestamp': current_time,
+                'market': market,
+                'action': 'SYNC',
+                'price': balance_info['avg_buy_price'],
+                'quantity': balance_info['balance'],
+                'amount': balance_info['balance'] * balance_info['avg_buy_price'],
+                'profit_loss': 0,  # 동기화는 손익 없음
+                'status': '수동 거래 동기화',
+                'source': 'manual_trade_detection'
+            })
+        
+        if sync_records:
+            # 기존 trade_history.csv에 추가
+            if os.path.exists("trade_history.csv"):
+                existing_df = pd.read_csv("trade_history.csv")
+                sync_df = pd.DataFrame(sync_records)
+                combined_df = pd.concat([existing_df, sync_df], ignore_index=True)
+            else:
+                combined_df = pd.DataFrame(sync_records)
+            
+            combined_df.to_csv("trade_history.csv", index=False)
+            logger.info(f"📝 수동 거래 동기화 기록 저장: {len(sync_records)}건")
+            
+    except Exception as e:
+        logger.error(f"수동 동기화 기록 실패: {e}")
 
 def main():
     """메인 대시보드"""
@@ -295,7 +497,7 @@ def main():
         )
     
     # 탭 생성
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 대시보드", "💼 보유 종목", "📈 거래 내역", "🤖 AI 성과", "⚙️ 설정"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 대시보드", "💼 보유 종목", "📈 거래 내역", "🤖 AI 성과", "⚙️ 설정", "🔄 실제 잔고"])
     
     with tab1:
         show_realtime_status(system_status, risk_manager)
@@ -312,6 +514,9 @@ def main():
     with tab5:
         show_settings()
     
+    with tab6:
+        show_actual_upbit_balances(system_status)
+    
     # 자동 새로고침
     if st.session_state.auto_refresh:
         time.sleep(5)
@@ -320,6 +525,65 @@ def main():
 def show_realtime_status(system_status, risk_manager):
     """실시간 현황 탭"""
     st.subheader("📊 실시간 거래 현황")
+    
+    # 🚨 동기화 상태 최우선 표시
+    sync_status = system_status.get('sync_status', {})
+    if not sync_status.get('is_synced', True):
+        st.error(f"⚠️ **실제 업비트 계좌와 불일치 감지!** ({sync_status.get('total_differences', 0)}개 차이점)")
+        st.write("📱 **업비트 앱에서 직접 거래한 내역이 감지되었습니다.**")
+        
+        with st.expander("🔍 상세 차이점 및 해결방법", expanded=True):
+            differences = sync_status.get('differences', [])
+            for diff in differences:
+                if diff['type'] == 'missing_in_bot':
+                    st.warning(f"🔸 **{diff['description']}**")
+                    st.write(f"   📊 실제 보유량: **{diff['upbit_amount']:.6f}개**")
+                    st.write(f"   💡 **업비트 앱에서 직접 매수한 것으로 추정됩니다.**")
+                elif diff['type'] == 'missing_in_upbit':
+                    st.error(f"🔸 **{diff['description']}**") 
+                    st.write(f"   📋 봇 기록량: **{diff['bot_amount']:.6f}개**")
+                    st.write(f"   💡 **업비트 앱에서 직접 매도한 것으로 추정됩니다.**")
+                elif diff['type'] == 'quantity_mismatch':
+                    st.warning(f"🔸 **{diff['description']}**")
+                    st.write(f"   📋 봇 기록: **{diff['bot_amount']:.6f}개**")
+                    st.write(f"   📊 실제 보유: **{diff['upbit_amount']:.6f}개**")
+                    st.write(f"   💡 **부분 매도/매수가 발생한 것으로 추정됩니다.**")
+                
+                st.divider()
+        
+        # 동기화 버튼
+        col_sync1, col_sync2, col_sync3 = st.columns(3)
+        with col_sync1:
+            if st.button("🔄 **실제 업비트 잔고와 동기화**", type="primary"):
+                if _sync_with_upbit(system_status['actual_upbit_balances']):
+                    st.success("✅ 동기화가 완료되었습니다!")
+                    st.info("🔄 새로고침하여 변경사항을 확인하세요.")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error("❌ 동기화에 실패했습니다. 로그를 확인해주세요.")
+        
+        with col_sync2:
+            if st.button("🔍 실제 업비트 잔고 보기"):
+                st.subheader("📊 실제 업비트 계좌 현황")
+                actual_balances = system_status.get('actual_upbit_balances', {})
+                if actual_balances:
+                    for market, balance_info in actual_balances.items():
+                        coin_name = market.replace('KRW-', '')
+                        st.write(f"💰 **{coin_name}**: {balance_info['balance']:.6f}개")
+                        st.write(f"   평균 매수가: {balance_info['avg_buy_price']:,.0f}원")
+                        st.divider()
+                else:
+                    st.info("📋 실제 업비트에 보유 중인 코인이 없습니다.")
+        
+        with col_sync3:
+            if st.button("⚠️ 수동 거래 알림 해제"):
+                st.session_state['manual_trade_dismissed'] = True
+                st.rerun()
+    else:
+        st.success("✅ 실제 업비트 계좌와 완전히 동기화됨")
+        if st.button("🔍 동기화 상태 재확인"):
+            st.rerun()
     
     # 현재 포지션 요약
     positions_info = system_status.get('positions', {})
@@ -466,9 +730,15 @@ def show_realtime_status(system_status, risk_manager):
 def show_positions(system_status, risk_manager):
     """보유 종목 상세 정보 탭"""
     st.subheader("💼 보유 종목 현황")
-    
+
+    # 동기화 상태 간단 표시
+    sync_status = system_status.get('sync_status', {})
+    if not sync_status.get('is_synced', True):
+        st.warning(f"⚠️ 실제 업비트와 {sync_status.get('total_differences', 0)}개 차이점 있음 - 📊 대시보드 탭에서 동기화하세요")
+
     positions_info = system_status.get('positions', {})
     positions = positions_info.get('positions', {})
+    actual_balances = system_status.get('actual_upbit_balances', {})
     
     if not positions:
         st.info("🔍 현재 보유 중인 종목이 없습니다.")
@@ -525,8 +795,31 @@ def show_positions(system_status, risk_manager):
     for i, (market, pos_info) in enumerate(positions.items()):
         coin_name = market.replace('KRW-', '')
         
+        # 실제 업비트 잔고와 비교
+        actual_balance_info = actual_balances.get(market)
+        is_synced = True
+        sync_warning = ""
+        
+        if actual_balance_info:
+            bot_quantity = pos_info.get('quantity', 0)
+            upbit_quantity = actual_balance_info['balance']
+            
+            if abs(bot_quantity - upbit_quantity) > 0.001:
+                is_synced = False
+                if upbit_quantity > bot_quantity:
+                    sync_warning = f"⚠️ 실제 보유량이 더 많음 (+{upbit_quantity - bot_quantity:.6f}개)"
+                else:
+                    sync_warning = f"⚠️ 실제 보유량이 더 적음 ({upbit_quantity - bot_quantity:.6f}개)"
+        else:
+            is_synced = False
+            sync_warning = "❌ 실제 업비트에서 이 종목을 찾을 수 없음"
+        
         # 각 종목별 컨테이너
         with st.container():
+            # 동기화 상태 알림 (종목별)
+            if not is_synced:
+                st.warning(f"🔸 **{coin_name}** {sync_warning}")
+            
             # 종목 헤더
             col_header1, col_header2 = st.columns([3, 1])
             
@@ -1201,7 +1494,7 @@ def show_settings():
             - 너무 낮으면 잦은 매수, 너무 높으면 기회 부족
             
             **AI 신뢰도 임계값**: AI 추천 신뢰도가 이 값 이상일 때만 매수
-            - 추천값: 6-8
+            - 추천값: 7-8 (최적화됨: 6→7로 상향조정)
             - 높을수록 안전하지만 기회 감소
             """)
         
@@ -1281,6 +1574,141 @@ def format_setting_value(value) -> str:
             return str(value)
     else:
         return str(value)
+
+def show_actual_upbit_balances(system_status):
+    """실제 업비트 계좌 현황 탭"""
+    st.header("🔄 실제 업비트 계좌 현황")
+    
+    actual_balances = system_status.get('actual_upbit_balances', {})
+    sync_status = system_status.get('sync_status', {})
+    
+    # 동기화 상태 상단 표시
+    if sync_status.get('is_synced', True):
+        st.success("✅ **봇 기록과 실제 업비트 계좌가 완전히 동기화되어 있습니다.**")
+    else:
+        st.error(f"⚠️ **{sync_status.get('total_differences', 0)}개의 차이점이 발견되었습니다.**")
+        if st.button("🔄 지금 동기화하기", type="primary"):
+            if _sync_with_upbit(actual_balances):
+                st.success("✅ 동기화 완료!")
+                st.rerun()
+    
+    # 새로고침 버튼
+    col_refresh1, col_refresh2 = st.columns([1, 4])
+    with col_refresh1:
+        if st.button("🔄 새로고침"):
+            st.rerun()
+    
+    st.divider()
+    
+    # 실제 업비트 잔고 표시
+    if actual_balances:
+        st.subheader("💰 실제 보유 코인 현황")
+        
+        # 총 투자 금액 계산
+        total_investment_krw = 0
+        total_current_value_krw = 0
+        
+        upbit_api = get_upbit_api()
+        
+        for market, balance_info in actual_balances.items():
+            coin_name = market.replace('KRW-', '')
+            quantity = balance_info['balance']
+            avg_buy_price = balance_info['avg_buy_price']
+            locked = balance_info['locked']
+            
+            # 현재가 조회
+            try:
+                current_price = upbit_api.get_current_price(market)
+            except:
+                current_price = 0
+            
+            # 투자 금액 및 현재 가치 계산
+            investment_krw = quantity * avg_buy_price if avg_buy_price > 0 else 0
+            current_value_krw = quantity * current_price if current_price > 0 else 0
+            pnl = current_value_krw - investment_krw if investment_krw > 0 else 0
+            pnl_rate = (pnl / investment_krw * 100) if investment_krw > 0 else 0
+            
+            total_investment_krw += investment_krw
+            total_current_value_krw += current_value_krw
+            
+            # 각 코인 정보 표시
+            with st.container():
+                # 수익/손실에 따른 색상
+                if pnl >= 0:
+                    st.markdown(f"### 🟢 **{coin_name}** ({market})")
+                else:
+                    st.markdown(f"### 🔴 **{coin_name}** ({market})")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("보유 수량", f"{quantity:.6f}", help="실제 업비트 보유량")
+                    if locked > 0:
+                        st.caption(f"🔒 주문중: {locked:.6f}")
+                
+                with col2:
+                    st.metric("평균 매수가", f"{avg_buy_price:,.0f}원" if avg_buy_price > 0 else "정보 없음")
+                    st.metric("현재가", f"{current_price:,.0f}원" if current_price > 0 else "조회 실패")
+                
+                with col3:
+                    st.metric("투자 금액", f"{investment_krw:,.0f}원" if investment_krw > 0 else "계산 불가")
+                    st.metric("현재 가치", f"{current_value_krw:,.0f}원" if current_value_krw > 0 else "계산 불가")
+                
+                with col4:
+                    if pnl != 0:
+                        pnl_color = "normal" if pnl >= 0 else "inverse"
+                        st.metric(
+                            "손익",
+                            f"{pnl:+,.0f}원",
+                            delta=f"{pnl_rate:+.2f}%",
+                            delta_color=pnl_color
+                        )
+                    else:
+                        st.metric("손익", "계산 불가")
+                
+                # 동기화 상태 표시
+                positions_data = system_status.get('positions', {}).get('positions', {})
+                if market in positions_data:
+                    bot_quantity = positions_data[market].get('quantity', 0)
+                    if abs(bot_quantity - quantity) <= 0.001:
+                        st.success("✅ 봇 기록과 일치")
+                    else:
+                        quantity_diff = quantity - bot_quantity
+                        st.warning(f"⚠️ 수량 차이: {quantity_diff:+.6f}개")
+                else:
+                    st.info("📱 수동 거래로 추정됨 (봇 기록 없음)")
+                
+                st.divider()
+        
+        # 총합 표시
+        st.subheader("📊 총 투자 현황")
+        col_total1, col_total2, col_total3 = st.columns(3)
+        
+        with col_total1:
+            st.metric("총 투자 금액", f"{total_investment_krw:,.0f}원")
+        
+        with col_total2:
+            st.metric("총 현재 가치", f"{total_current_value_krw:,.0f}원")
+        
+        with col_total3:
+            total_pnl = total_current_value_krw - total_investment_krw
+            total_pnl_rate = (total_pnl / total_investment_krw * 100) if total_investment_krw > 0 else 0
+            pnl_color = "normal" if total_pnl >= 0 else "inverse"
+            st.metric(
+                "총 손익", 
+                f"{total_pnl:+,.0f}원",
+                delta=f"{total_pnl_rate:+.2f}%",
+                delta_color=pnl_color
+            )
+        
+    else:
+        st.info("📋 **실제 업비트 계좌에 보유 중인 코인이 없습니다.**")
+        st.write("모든 코인이 원화로 정리되어 있거나, API 조회에 실패했을 수 있습니다.")
+        
+        # KRW 잔고 표시  
+        krw_balance = system_status.get('krw_balance', 0)
+        st.markdown("### 💵 원화 잔고")
+        st.metric("KRW 잔고", f"{krw_balance:,.0f}원")
 
 if __name__ == "__main__":
     main()

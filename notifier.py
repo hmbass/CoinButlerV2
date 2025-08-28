@@ -205,9 +205,17 @@ def get_telegram_notifier() -> Optional[TelegramNotifier]:
     notifier = TelegramNotifier(bot_token, chat_id)
     
     # 연결 테스트
+    logger.info("🔧 텔레그램 연결 테스트 중...")
     if not notifier.test_connection():
-        logger.error("텔레그램 연결 테스트 실패")
+        logger.error("❌ 텔레그램 연결 테스트 실패")
+        logger.error("💡 다음 사항을 확인하세요:")
+        logger.error("   1. TELEGRAM_BOT_TOKEN이 올바른지 확인")
+        logger.error("   2. TELEGRAM_CHAT_ID가 올바른지 확인")
+        logger.error("   3. 봇이 채팅방에 추가되어 있는지 확인")
+        logger.error("   4. 인터넷 연결 상태 확인")
         return None
+    else:
+        logger.info("✅ 텔레그램 연결 테스트 성공")
     
     return notifier
 
@@ -217,18 +225,45 @@ _notifier: Optional[TelegramNotifier] = None
 def init_notifier():
     """전역 알림기 초기화"""
     global _notifier
+    
+    logger.info("📱 텔레그램 알림 시스템 초기화 중...")
+    
     _notifier = get_telegram_notifier()
+    
+    if _notifier:
+        logger.info("✅ 텔레그램 알림 시스템이 성공적으로 초기화되었습니다.")
+        logger.info("📱 매수/매도 시 텔레그램 알림이 전송됩니다.")
+    else:
+        logger.error("❌ 텔레그램 알림 시스템 초기화 실패!")
+        logger.warning("📱 TELEGRAM_BOT_TOKEN과 TELEGRAM_CHAT_ID 환경변수를 확인하세요.")
+        logger.info("💡 .env 파일에서 다음 설정을 확인하세요:")
+        logger.info("   TELEGRAM_BOT_TOKEN=your_bot_token")
+        logger.info("   TELEGRAM_CHAT_ID=your_chat_id")
 
 def notify_buy(market: str, price: float, amount: float, reason: str = ""):
     """매수 알림 전송"""
     if _notifier:
-        _notifier.send_buy_notification(market, price, amount, reason)
+        success = _notifier.send_buy_notification(market, price, amount, reason)
+        if success:
+            logger.info(f"📱 매수 텔레그램 알림 전송 완료: {market}")
+        else:
+            logger.error(f"📱 매수 텔레그램 알림 전송 실패: {market}")
+    else:
+        logger.warning("📱 텔레그램 알림이 설정되지 않음 (매수 알림 스킵)")
+        logger.info(f"💰 매수 정보: {market} {price:,.0f}원 {amount:,.0f}원 - {reason}")
 
 def notify_sell(market: str, price: float, amount: float, profit_loss: float, 
                profit_rate: float, reason: str = ""):
     """매도 알림 전송"""
     if _notifier:
-        _notifier.send_sell_notification(market, price, amount, profit_loss, profit_rate, reason)
+        success = _notifier.send_sell_notification(market, price, amount, profit_loss, profit_rate, reason)
+        if success:
+            logger.info(f"📱 매도 텔레그램 알림 전송 완료: {market}")
+        else:
+            logger.error(f"📱 매도 텔레그램 알림 전송 실패: {market}")
+    else:
+        logger.warning("📱 텔레그램 알림이 설정되지 않음 (매도 알림 스킵)")
+        logger.info(f"💰 매도 정보: {market} {price:,.0f}원 {amount:,.0f}원 손익:{profit_loss:,.0f}원 ({profit_rate:+.2f}%) - {reason}")
 
 def notify_error(error_type: str, error_message: str):
     """에러 알림 전송"""

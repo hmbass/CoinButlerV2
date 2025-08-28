@@ -9,6 +9,6 @@
   "check_interval": 60,
   "market_scan_interval": 10,
   "daily_loss_limit": -50000,
-  "ai_confidence_threshold": 6,
+  "ai_confidence_threshold": 7,
   "last_updated": "2025-08-27T16:46:38.092918"
 }

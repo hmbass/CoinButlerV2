@@ -4,6 +4,7 @@
 import os
 import time
 import logging
+import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import google.generativeai as genai
@@ -96,9 +97,14 @@ class AIAnalyzer:
             # JSON 파싱
             result = json.loads(response_text)
             
-            # 신뢰도가 낮으면 fallback 모델 사용
-            if result.get('confidence', 0) < 6:
-                logger.warning(f"낮은 신뢰도({result.get('confidence')}) - fallback 모델 시도")
+            # 신뢰도가 낮으면 fallback 모델 사용 (동적 임계값 적용)
+            confidence_threshold = 7  # 기본값, 실제로는 설정에서 가져와야 함
+            if hasattr(self, 'parent_bot') and self.parent_bot:
+                current_settings = self.parent_bot.get_current_settings()
+                confidence_threshold = current_settings.get('ai_confidence_threshold', 7)
+            
+            if result.get('confidence', 0) < confidence_threshold:
+                logger.warning(f"낮은 신뢰도({result.get('confidence')}) - fallback 모델 시도 (임계값: {confidence_threshold})")
                 fallback_result = self._analyze_with_fallback_model(market_context, detailed_analysis)
                 if fallback_result.get('confidence', 0) > result.get('confidence', 0):
                     result = fallback_result
@@ -133,10 +139,14 @@ class AIAnalyzer:
                 external_data = market_collector.get_comprehensive_market_context()
             
             # Upbit 데이터 수집
-            upbit_api = self.model._upbit_api if hasattr(self.model, '_upbit_api') else None
+            # 기존 CoinButler 인스턴스의 upbit_api 사용
+            upbit_api = None
+            if hasattr(self, 'parent_bot') and hasattr(self.parent_bot, 'upbit_api'):
+                upbit_api = self.parent_bot.upbit_api
+            
             if not upbit_api:
-                from trade_utils import UpbitAPI
-                upbit_api = UpbitAPI()
+                from trade_utils import get_upbit_api
+                upbit_api = get_upbit_api()
             
             btc_price = upbit_api.get_current_price("KRW-BTC")
             eth_price = upbit_api.get_current_price("KRW-ETH")
@@ -324,8 +334,14 @@ class AIAnalyzer:
     def _get_detailed_coin_analysis(self, data: Dict) -> Dict:
         """개별 코인의 상세 기술적 분석"""
         try:
-            from trade_utils import UpbitAPI
-            upbit_api = UpbitAPI()
+            # 기존 CoinButler 인스턴스의 upbit_api 사용
+            upbit_api = None
+            if hasattr(self, 'parent_bot') and hasattr(self.parent_bot, 'upbit_api'):
+                upbit_api = self.parent_bot.upbit_api
+            
+            if not upbit_api:
+                from trade_utils import get_upbit_api
+                upbit_api = get_upbit_api()
             
             market = data['market']
             
@@ -879,7 +895,12 @@ class CoinButler:
         
         # AI 분석기 초기화 (Google Gemini)
         gemini_key = os.getenv('GEMINI_API_KEY')
-        self.ai_analyzer = AIAnalyzer(gemini_key) if gemini_key else None
+        if gemini_key:
+            self.ai_analyzer = AIAnalyzer(gemini_key)
+            # AI 분석기에 부모 봇 참조 전달
+            self.ai_analyzer.parent_bot = self
+        else:
+            self.ai_analyzer = None
         
         # 상태 변수
         self.is_running = False
@@ -902,7 +923,7 @@ class CoinButler:
             'price_change_threshold': self.config_manager.get('price_change_threshold', 0.05),
             'check_interval': self.config_manager.get('check_interval', 60),
             'market_scan_interval': self.config_manager.get('market_scan_interval', 10),
-            'ai_confidence_threshold': self.config_manager.get('ai_confidence_threshold', 6),
+            'ai_confidence_threshold': self.config_manager.get('ai_confidence_threshold', 7),
             'daily_loss_limit': self.config_manager.get('daily_loss_limit', -50000)
         }
         
@@ -1289,6 +1310,8 @@ class CoinButler:
                             reason = f"AI 분할매수 {investment_amount:,.0f}원 (거래량 {candidate.get('volume_ratio', 0):.1f}배)"
                         else:
                             reason = f"거래량 {candidate.get('volume_ratio', 0):.1f}배 급등"
+                        
+                        logger.info(f"📱 매수 텔레그램 알림 전송 시도: {market}")
                         notify_buy(market, avg_price, actual_investment, reason)
                         logger.info(f"✅ 매수 완료: {market}, 가격: {avg_price:,.0f}, 수량: {executed_volume}, 실제투자: {actual_investment:,.0f}원")
                         
@@ -1385,6 +1408,7 @@ class CoinButler:
                     profit_rate = (profit_loss / position.investment_amount) * 100
                     
                     # 매도 알림
+                    logger.info(f"📱 매도 텔레그램 알림 전송 시도: {market}")
                     notify_sell(market, avg_price, position.quantity * avg_price, 
                                profit_loss, profit_rate, reason)
                     
@@ -1477,7 +1501,11 @@ class CoinButler:
                 sell_position = next((pos for pos in losing_positions if pos['market'] == sell_market), None)
                 buy_opportunity = next((opp for opp in opportunities if opp['market'] == buy_market), None)
                 
-                if sell_position and buy_opportunity and confidence >= 6:  # 신뢰도 6 이상만 실행
+                # 동적 신뢰도 임계값 적용
+                current_settings = self.get_current_settings()
+                confidence_threshold = current_settings.get('ai_confidence_threshold', 7)
+                
+                if sell_position and buy_opportunity and confidence >= confidence_threshold:  # 동적 신뢰도 임계값 적용
                     # 손절매 실행
                     logger.info(f"🔸 손절매 실행: {sell_market}")
                     self._execute_sell(sell_market, sell_position['current_price'], 
@@ -1491,7 +1519,7 @@ class CoinButler:
                     
                     logger.info(f"🎯 포지션 교체 완료: {sell_market} → {buy_market}")
                 else:
-                    logger.info(f"⚠️ 포지션 교체 취소: 신뢰도 부족 또는 종목 정보 오류 (신뢰도: {confidence})")
+                    logger.info(f"⚠️ 포지션 교체 취소: 신뢰도 부족 또는 종목 정보 오류 (신뢰도: {confidence}, 필요: {confidence_threshold})")
             else:
                 logger.info("📊 AI 분석 결과: 포지션 교체 불필요")
                 if swap_analysis.get('reason'):

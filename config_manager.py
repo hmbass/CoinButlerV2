@@ -36,7 +36,7 @@ class ConfigManager:
             "daily_loss_limit": -50000,    # 일일 손실 한도
             
             # AI 설정
-            "ai_confidence_threshold": 6,  # AI 신뢰도 임계값
+            "ai_confidence_threshold": 7,  # AI 신뢰도 임계값 (6→7로 상향조정)
             
             # 마지막 업데이트 시간
             "last_updated": datetime.now().isoformat()
