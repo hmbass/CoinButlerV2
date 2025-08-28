@@ -574,6 +574,7 @@ class AIAnalyzer:
 📊 {analysis['market']}:
 • 현재가: {analysis['current_price']:,.0f}원 ({analysis['price_change']:+.2f}%)
 • 거래량: {analysis['volume_ratio']:.1f}배 급등 ({analysis.get('volume_trend', 'NORMAL')})
+• 💰 거래대금: {analysis.get('trade_amount', 0):,.0f}만원 (순위: {analysis.get('trade_amount_rank', '?')}위)
 • RSI: {analysis.get('rsi', 50):.1f} → {analysis.get('rsi_signal', 'HOLD')} 신호
 • MACD: {analysis.get('macd_trend', 'NEUTRAL')} ({analysis.get('macd_signal_strength', 'WEAK')})
 • 스토캐스틱: K{analysis.get('stoch_k', 50):.1f}/D{analysis.get('stoch_d', 50):.1f} → {analysis.get('stoch_signal', 'HOLD')}
@@ -595,18 +596,24 @@ class AIAnalyzer:
 📈 거래량 급등 후보 종목들:
 {coins_text}
 
-🎯 **중요한 선택 기준:**
-1. **리스크 vs 수익**: 급등 후 추가 상승 가능성이 높고 하락 리스크는 낮은가?
-2. **기술적 신호**: RSI, 이동평균, 볼린저밴드가 모두 매수를 지지하는가?
-3. **거래량 지속성**: 거래량 증가가 일회성이 아닌 지속적 관심인가?
-4. **시장 상관관계**: 전체 시장 흐름과 동조성이 좋은가?
-5. **진입 타이밍**: 지금이 가장 좋은 진입점인가?
+🎯 **중요한 선택 기준 (우선순위 순):**
+1. **💰 거래대금**: 거래대금이 높을수록 유동성이 풍부하고 수익률이 높음 (최우선 고려)
+2. **리스크 vs 수익**: 급등 후 추가 상승 가능성이 높고 하락 리스크는 낮은가?
+3. **기술적 신호**: RSI, 이동평균, 볼린저밴드가 모두 매수를 지지하는가?
+4. **거래량 지속성**: 거래량 증가가 일회성이 아닌 지속적 관심인가?
+5. **시장 상관관계**: 전체 시장 흐름과 동조성이 좋은가?
+6. **진입 타이밍**: 지금이 가장 좋은 진입점인가?
+
+💡 **거래대금 가중치 가이드:**
+- **1000만원 이상**: 매우 높은 유동성, 최우선 고려 대상
+- **500-1000만원**: 높은 유동성, 우선 고려
+- **100-500만원**: 보통 유동성, 기술적 분석 중시
+- **100만원 미만**: 낮은 유동성, 신중 고려
 
 ⚠️ **주의사항:**
-- 이미 급등한 종목의 추가 상승 여력 신중히 판단
+- 거래대금이 낮으면 아무리 기술적 신호가 좋아도 피하는 것이 좋음
 - RSI 70 이상이면 과매수 구간으로 위험도 높음
-- 거래량이 급증했지만 가격이 하락했다면 매도 압력 주의
-- 전체 시장이 약세면 개별 종목도 영향받을 수 있음
+- 거래대금 1위라면 다소 높은 RSI도 수용 가능
 
 다음 JSON 형식으로만 응답하세요:
 {{
@@ -632,12 +639,12 @@ JSON만 출력하세요.
             # 더 보수적인 gemini-1.5-pro 모델 사용
             fallback_model = genai.GenerativeModel('gemini-1.5-pro')
             
-            simple_prompt = f"""
+            simple_prompt = """
 전문 트레이더 관점에서 다음 3개 종목 중 가장 안전하고 수익성 높은 1개를 선택하세요:
 
 """
             for analysis in detailed_analysis:
-                simple_prompt += f"• {analysis['market']}: 가격변동 {analysis['price_change']:+.2f}%, 거래량 {analysis['volume_ratio']:.1f}배, RSI {analysis.get('rsi', 50):.1f}\n"
+                simple_prompt += f"• {analysis['market']}: 거래대금 {analysis.get('trade_amount', 0):,.0f}만원, 가격변동 {analysis['price_change']:+.2f}%, 거래량 {analysis['volume_ratio']:.1f}배, RSI {analysis.get('rsi', 50):.1f}\n"
             
             simple_prompt += """
 JSON으로만 응답:
@@ -680,10 +687,15 @@ JSON으로만 응답:
         best_score = -1
         
         for data in market_data:
-            # 간단한 점수 계산: 거래량 증가 + 적절한 가격 변동
+            # 거래대금 기반 점수 계산: 거래대금 + 거래량 증가 + 적절한 가격 변동
+            trade_amount = data.get('trade_amount', 0)
+            trade_amount_score = min(trade_amount / 1000, 1.0)  # 1000만원을 만점으로 정규화
+            
             volume_score = min(data.get('volume_ratio', 1), 5) / 5  # 최대 5배까지만 점수화
             price_score = 1 - (abs(data['price_change']) / 20)  # 20% 변동을 기준으로 점수화
-            total_score = (volume_score + price_score) / 2
+            
+            # 거래대금에 50% 가중치 부여 (기존 50%)
+            total_score = (trade_amount_score * 0.5) + ((volume_score + price_score) / 2 * 0.5)
             
             if total_score > best_score:
                 best_score = total_score
@@ -693,7 +705,7 @@ JSON으로만 응답:
             return {
                 "recommended_coin": best_candidate['market'].replace('KRW-', ''),
                 "confidence": max(3, int(best_score * 10)),  # 최소 3점
-                "reason": f"거래량 {best_candidate.get('volume_ratio', 1):.1f}배 증가, 가격변동 {best_candidate['price_change']:+.2f}%로 적절함",
+                "reason": f"거래대금 {best_candidate.get('trade_amount', 0):,.0f}만원(순위{best_candidate.get('trade_amount_rank', '?')}위), 거래량 {best_candidate.get('volume_ratio', 1):.1f}배 증가",
                 "risk_level": "MEDIUM"
             }
         
@@ -730,12 +742,18 @@ JSON으로만 응답:
 - 종목: {market}
 - 현재가: {current_price:,.0f}원
 - 거래량 증가: {volume_ratio:.1f}배
+- 💰 거래대금: {market_data.get('trade_amount', 0):,.0f}만원 (순위: {market_data.get('trade_amount_rank', '?')}위)
 - 가격 변동: {price_change:+.2f}%
 
 **계정 정보:**
 - 사용 가능 잔고: {available_balance:,.0f}원
 - 현재 보유 포지션: {current_positions}개
 - 남은 포지션 슬롯: {remaining_slots}개
+
+**투자 가이드:**
+- 거래대금 1000만원 이상: 적극 투자 (30000-100000원)
+- 거래대금 500-1000만원: 보통 투자 (30000-70000원)  
+- 거래대금 500만원 미만: 보수적 투자 (30000-50000원)
 
 다음 JSON 형식으로만 응답해주세요:
 {{
@@ -820,7 +838,8 @@ JSON만 출력하세요.
             opportunity_info = []
             for opp in market_opportunities[:3]:
                 opportunity_info.append(
-                    f"- {opp['market']}: 거래량 {opp.get('volume_ratio', 2.0):.1f}배, "
+                    f"- {opp['market']}: 거래대금 {opp.get('trade_amount', 0):,.0f}만원, "
+                    f"거래량 {opp.get('volume_ratio', 2.0):.1f}배, "
                     f"가격변동 {opp['price_change']:+.2f}%"
                 )
             
@@ -843,11 +862,12 @@ JSON만 출력하세요.
   "expected_recovery_days": 3
 }}
 
-판단 기준:
-1. 손실 포지션이 1일 이상 보유되고 -5% 이상 손실
-2. 새로운 기회의 상승 가능성이 현재 포지션보다 높음
-3. 거래량 급등 강도와 기술적 지표 고려
-4. 손절 손실보다 새 투자 수익 예상이 클 때만 교체
+판단 기준 (우선순위 순):
+1. **💰 거래대금**: 새로운 기회의 거래대금이 높을수록 우선 고려 (500만원 이상 적극 권장)
+2. 손실 포지션이 1일 이상 보유되고 -5% 이상 손실
+3. 새로운 기회의 상승 가능성이 현재 포지션보다 높음
+4. 거래량 급등 강도와 기술적 지표 고려
+5. 손절 손실보다 새 투자 수익 예상이 클 때만 교체
 
 교체하지 않으면 should_swap: false로 설정하세요.
 JSON만 출력하세요.
@@ -1177,6 +1197,9 @@ class CoinButler:
                         price_change = self.market_analyzer.get_price_change(market)
                         
                         if current_price and price_change is not None:
+                            # 거래대금 정보 추가 (5분봉 거래대금)
+                            trade_amount = self._get_trade_amount(market)
+                            
                             # 가격 급등/급락 필터링 (너무 큰 변동은 위험) - 동적 설정 사용
                             price_threshold = settings['price_change_threshold']
                             if abs(price_change) < price_threshold:
@@ -1184,7 +1207,9 @@ class CoinButler:
                                     'market': market,
                                     'current_price': current_price,
                                     'price_change': price_change,
-                                    'volume_ratio': volume_threshold
+                                    'volume_ratio': volume_threshold,
+                                    'trade_amount': trade_amount,  # 거래대금 추가
+                                    'trade_amount_rank': 0  # 나중에 계산
                                 })
                                 
                                 # 거래량 급등 로그 (알림은 제거)
@@ -1200,14 +1225,29 @@ class CoinButler:
                 logger.info("거래량 급등 종목 없음")
                 return
             
-            logger.info(f"거래량 급등 감지: {len(spike_candidates)}개 종목")
+            # 거래대금 기준으로 정렬 및 랭킹 부여 (높은 순)
+            spike_candidates.sort(key=lambda x: x['trade_amount'], reverse=True)
+            for i, candidate in enumerate(spike_candidates):
+                candidate['trade_amount_rank'] = i + 1
             
-            # AI 분석 (옵션)
-            best_candidate = spike_candidates[0]  # 기본값: 첫 번째 후보
+            logger.info(f"거래량 급등 감지: {len(spike_candidates)}개 종목")
+            logger.info(f"거래대금 TOP3: " + 
+                       ", ".join([f"{c['market'].replace('KRW-', '')}({c['trade_amount']:,.0f}만원)" 
+                                 for c in spike_candidates[:3]]))
+            
+            # 거래대금 상위 종목 우선 고려 (상위 70% 가중치 적용)
+            top_candidates = spike_candidates[:max(1, int(len(spike_candidates) * 0.7))]
+            if len(top_candidates) < len(spike_candidates):
+                logger.info(f"거래대금 상위 {len(top_candidates)}개 종목 우선 분석")
+            
+            # AI 분석 (옵션) - 거래대금 상위 종목들을 우선 분석
+            best_candidate = spike_candidates[0]  # 기본값: 거래대금 1위 종목
             
             if self.ai_analyzer and self.ai_analyzer.enabled and len(spike_candidates) > 1:
                 try:
-                    ai_result = self.ai_analyzer.analyze_market_condition(spike_candidates)
+                    # 거래대금 상위 종목들을 AI에 전달 (최대 5개)
+                    ai_candidates = top_candidates[:5]
+                    ai_result = self.ai_analyzer.analyze_market_condition(ai_candidates)
                     
                     confidence_threshold = settings['ai_confidence_threshold']
                     if (ai_result.get('recommended_coin') and 
@@ -1242,6 +1282,21 @@ class CoinButler:
             
         except Exception as e:
             logger.error(f"매수 기회 탐색 오류: {e}")
+    
+    def _get_trade_amount(self, market: str) -> float:
+        """특정 종목의 5분봉 거래대금 조회 (만원 단위)"""
+        try:
+            candles = self.upbit_api.get_candles(market, minutes=5, count=1)
+            if candles and len(candles) > 0:
+                # candle_acc_trade_price는 원 단위 거래대금
+                trade_amount_krw = float(candles[0].get('candle_acc_trade_price', 0))
+                # 만원 단위로 변환
+                trade_amount_man = trade_amount_krw / 10000
+                return trade_amount_man
+            return 0.0
+        except Exception as e:
+            logger.error(f"거래대금 조회 실패 ({market}): {e}")
+            return 0.0
     
     def _execute_buy(self, candidate: Dict, settings: Dict):
         """매수 실행 (분할매수 지원)"""
@@ -1307,9 +1362,9 @@ class CoinButler:
                     if success:
                         # 매수 알림
                         if self.ai_analyzer and self.ai_analyzer.enabled:
-                            reason = f"AI 분할매수 {investment_amount:,.0f}원 (거래량 {candidate.get('volume_ratio', 0):.1f}배)"
+                            reason = f"AI 분할매수 {investment_amount:,.0f}원 (거래대금 {candidate.get('trade_amount', 0):,.0f}만원, 거래량 {candidate.get('volume_ratio', 0):.1f}배)"
                         else:
-                            reason = f"거래량 {candidate.get('volume_ratio', 0):.1f}배 급등"
+                            reason = f"거래대금 {candidate.get('trade_amount', 0):,.0f}만원, 거래량 {candidate.get('volume_ratio', 0):.1f}배 급등"
                         
                         logger.info(f"📱 매수 텔레그램 알림 전송 시도: {market}")
                         notify_buy(market, avg_price, actual_investment, reason)
@@ -1465,11 +1520,14 @@ class CoinButler:
                     price_change = self.market_analyzer.get_price_change(market)
                     
                     if volume_ratio >= 2.0:  # 거래량 2배 이상 증가
+                        # 거래대금 정보 추가
+                        trade_amount = self._get_trade_amount(market)
                         opportunities.append({
                             'market': market,
                             'current_price': current_price,
                             'volume_ratio': volume_ratio,
-                            'price_change': price_change or 0
+                            'price_change': price_change or 0,
+                            'trade_amount': trade_amount
                         })
                 except Exception as e:
                     logger.debug(f"시장 데이터 조회 실패 ({market}): {e}")
