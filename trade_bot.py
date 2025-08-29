@@ -123,6 +123,211 @@ class AIAnalyzer:
             logger.error(f"AI 분석 오류: {e}")
             return self._get_fallback_recommendation(market_data)
     
+    def analyze_profit_potential(self, market_data: List[Dict]) -> Dict:
+        """거래대금 상위 종목들의 수익률 잠재력 분석"""
+        try:
+            if not market_data:
+                return self._get_profit_fallback_analysis([])
+            
+            # 시장 상황 분석
+            market_context = self._get_market_context()
+            
+            # 각 종목별 상세 분석
+            detailed_analysis = []
+            for data in market_data:
+                analysis = self._get_detailed_coin_analysis(data)
+                detailed_analysis.append(analysis)
+            
+            # 수익률 중심 프롬프트 생성
+            prompt = self._create_profit_analysis_prompt(market_context, detailed_analysis)
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # JSON 부분만 추출
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            elif "```" in response_text:
+                json_start = response_text.find("```") + 3
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+            
+            ai_result = json.loads(response_text)
+            
+            # AI 추천 기록
+            recommendation = AIRecommendation(
+                timestamp=datetime.now().isoformat(),
+                recommended_coin=ai_result.get('recommended_coin', ''),
+                confidence=ai_result.get('confidence', 0),
+                reason=ai_result.get('reason', ''),
+                expected_profit=ai_result.get('expected_profit', 0),
+                risk_level=ai_result.get('risk_level', 'MEDIUM'),
+                analysis_type='profit_potential',
+                
+                # 기술적 지표
+                rsi=detailed_analysis[0].get('rsi', 50) if detailed_analysis else 50,
+                macd_trend=detailed_analysis[0].get('macd_trend', 'NEUTRAL') if detailed_analysis else 'NEUTRAL',
+                volume_ratio=detailed_analysis[0].get('trade_amount', 0) / 1000 if detailed_analysis else 0,  # 거래대금을 백만원 단위로
+                price_change=detailed_analysis[0].get('price_change', 0) if detailed_analysis else 0
+            )
+            
+            # 성과 추적 시스템에 저장
+            tracker = get_ai_performance_tracker()
+            rec_id = tracker.save_recommendation(recommendation)
+            
+            # 추천 ID를 결과에 추가
+            ai_result['recommendation_id'] = rec_id
+            
+            return ai_result
+            
+        except Exception as e:
+            logger.error(f"AI 수익률 분석 오류: {e}")
+            # Fallback 분석
+            return self._get_profit_fallback_analysis(market_data)
+    
+    def _create_profit_analysis_prompt(self, market_context: Dict, detailed_analysis: List[Dict]) -> str:
+        """수익률 중심 고도화된 프롬프트 생성"""
+        # 시장 상황 요약
+        market_summary = f"""
+🌍 전체 시장 상황:
+- BTC 현재가: {market_context['btc_price']:,.0f}원
+- ETH 현재가: {market_context['eth_price']:,.0f}원  
+- BTC RSI: {market_context['btc_rsi']:.1f} ({market_context['market_sentiment']})
+- 시장 변동성: {market_context['market_volatility']:.1f}%
+
+📊 글로벌 시장 지표:
+- Fear & Greed Index: {market_context.get('fear_greed_index', 'N/A')}
+- BTC 도미넌스: {market_context.get('btc_dominance', 'N/A')}%
+- 전체 시가총액: {market_context.get('total_market_cap', 'N/A')}
+
+"""
+        
+        # 종목별 상세 분석 (수익률 중심)
+        coin_analysis = []
+        for analysis in detailed_analysis:
+            coin_text = f"""
+📊 {analysis['market']}:
+• 현재가: {analysis['current_price']:,.0f}원 ({analysis['price_change']:+.2f}%)
+• 💰 거래대금: {analysis.get('trade_amount', 0):,.0f}만원 (순위: {analysis.get('trade_amount_rank', '?')}위)
+• 📈 수익률 지표:
+  - RSI: {analysis.get('rsi', 50):.1f} → {analysis.get('rsi_signal', 'HOLD')} 신호
+  - MACD: {analysis.get('macd_trend', 'NEUTRAL')} ({analysis.get('macd_signal_strength', 'WEAK')})
+  - 스토캐스틱: K{analysis.get('stoch_k', 50):.1f}/D{analysis.get('stoch_d', 50):.1f} → {analysis.get('stoch_signal', 'HOLD')}
+• 💡 기술적 분석:
+  - 이동평균: {analysis.get('ma_trend', 'SIDEWAYS')} 추세
+  - 볼린저밴드: {analysis.get('bb_position', 'MIDDLE')} 위치  
+  - 변동성: {analysis.get('volatility_level', 'MEDIUM')} 수준
+  - 가격위치: {analysis.get('price_position', 0.5)*100:.1f}% (지지선~저항선)
+"""
+            coin_analysis.append(coin_text)
+        
+        coins_text = "\n".join(coin_analysis)
+        
+        return f"""
+당신은 암호화폐 수익률 전문 분석가입니다. 거래대금 상위 종목들 중에서 **수익률이 가장 높을 것으로 예상되는** 1개 종목을 선택하세요.
+
+{market_summary}
+
+💰 거래대금 상위 후보 종목들:
+{coins_text}
+
+🎯 **수익률 중심 선택 기준 (우선순위 순):**
+1. **💰 거래대금**: 높은 거래대금 = 높은 유동성 = 안정적 수익 실현
+2. **📈 상승 모멘텀**: RSI, MACD, 스토캐스틱이 모두 상승 신호
+3. **🔥 기술적 돌파**: 저항선 돌파, 볼린저밴드 상단 돌파 등
+4. **⚡ 시장 동조성**: 전체 시장 흐름과 양의 상관관계  
+5. **🎢 변동성**: 적절한 변동성으로 수익 기회 창출
+
+💡 **수익률 예상 가이드:**
+- **거래대금 1000만원 이상 + 기술적 신호 강함**: 5-15% 수익 기대
+- **거래대금 500-1000만원 + 기술적 신호 보통**: 3-10% 수익 기대  
+- **거래대금 500만원 미만**: 위험 대비 수익 낮음
+
+⚠️ **주의사항:**
+- 이미 큰 폭 상승한 종목(+20% 이상)은 신중 고려
+- RSI 80 이상은 과매수로 조정 위험
+- 거래대금이 낮으면 아무리 기술적 신호가 좋아도 수익 실현 어려움
+
+**예상 수익률과 근거를 포함하여** 다음 JSON 형식으로만 응답하세요:
+{{
+  "recommended_coin": "BTC",
+  "confidence": 8,
+  "expected_profit": 7.5,
+  "reason": "거래대금 1위, RSI 돌파, MACD 골든크로스로 7.5% 수익 예상",
+  "risk_level": "LOW",
+  "investment_horizon": "3-7일"
+}}
+"""
+    
+    def _get_profit_fallback_analysis(self, market_data: List[Dict]) -> Dict:
+        """수익률 중심 Fallback 분석"""
+        if not market_data:
+            return {
+                "recommended_coin": None,
+                "confidence": 0,
+                "expected_profit": 0,
+                "reason": "분석 가능한 종목 없음",
+                "risk_level": "HIGH"
+            }
+        
+        # 거래대금과 기술적 지표를 고려한 점수 계산
+        best_candidate = None
+        best_score = -1
+        
+        for data in market_data:
+            # 거래대금 점수 (50% 가중치)
+            trade_amount = data.get('trade_amount', 0)
+            trade_score = min(trade_amount / 1000, 1.0)  # 1000만원을 만점으로 정규화
+            
+            # 가격 변동 점수 (25% 가중치) - 적절한 상승
+            price_change = data.get('price_change', 0)
+            if 0 <= price_change <= 15:  # 0~15% 상승이 최적
+                price_score = 1.0 - (abs(price_change - 7.5) / 7.5)  # 7.5%를 최적점으로
+            elif -5 <= price_change < 0:  # 약간의 하락은 기회
+                price_score = 0.7
+            else:
+                price_score = 0.3
+            
+            # 포지션 점수 (25% 가중치) - 순위가 높을수록 좋음
+            rank_score = max(0, 1 - (data.get('trade_amount_rank', 6) - 1) / 10)
+            
+            # 종합 점수
+            total_score = (trade_score * 0.5) + (price_score * 0.25) + (rank_score * 0.25)
+            
+            if total_score > best_score:
+                best_score = total_score
+                best_candidate = data
+        
+        if best_candidate:
+            # 예상 수익률 계산 (거래대금과 기술적 상황 기반)
+            trade_amount = best_candidate.get('trade_amount', 0)
+            price_change = best_candidate.get('price_change', 0)
+            
+            if trade_amount >= 1000:  # 1000만원 이상
+                expected_profit = 5 + (best_score * 10)  # 5-15%
+            elif trade_amount >= 500:  # 500-1000만원
+                expected_profit = 3 + (best_score * 7)   # 3-10%
+            else:
+                expected_profit = 1 + (best_score * 5)   # 1-6%
+            
+            return {
+                "recommended_coin": best_candidate['market'].replace('KRW-', ''),
+                "confidence": max(5, int(best_score * 10)),
+                "expected_profit": round(expected_profit, 1),
+                "reason": f"거래대금 {trade_amount:,.0f}만원(순위{best_candidate.get('trade_amount_rank', '?')}위), 기술적 점수 {best_score:.2f}점으로 {expected_profit:.1f}% 수익 예상",
+                "risk_level": "MEDIUM"
+            }
+        
+        return {
+            "recommended_coin": None,
+            "confidence": 0,
+            "expected_profit": 0,
+            "reason": "적절한 수익 기회 없음",
+            "risk_level": "HIGH"
+        }
+    
     def _get_market_context(self) -> Dict:
         """전체 시장 상황 분석 (고도화된 외부 데이터 포함)"""
         try:
@@ -1179,75 +1384,72 @@ class CoinButler:
                 logger.error(f"마켓 목록 조회 실패: {e}")
                 return
             
-            spike_candidates = []
+            high_volume_candidates = []
             
-            # 거래량 급등 종목 찾기 (속도 조절)
-            scan_count = min(20, len(markets))  # 최대 20개만 스캔
-            logger.info(f"상위 {scan_count}개 종목 스캔 중...")
+            # 거래대금 상위 종목 선별 (더 많은 종목 스캔)
+            scan_count = min(50, len(markets))  # 50개 종목 스캔
+            logger.info(f"거래대금 조회 중... (총 {scan_count}개 종목)")
             
             for i, market in enumerate(markets[:scan_count]):
                 try:
-                    # 매 5번째 종목마다 짧은 휴식 (API 제한 완화)
-                    if i > 0 and i % 5 == 0:
+                    # API 제한 완화를 위한 속도 조절
+                    if i > 0 and i % 10 == 0:
                         time.sleep(1)
                     
-                    volume_threshold = settings['volume_spike_threshold']
-                    if self.market_analyzer.detect_volume_spike(market, volume_threshold):
+                    # 거래대금 조회 (5분봉)
+                    trade_amount = self._get_trade_amount(market)
+                    
+                    # 최소 거래대금 필터링 (50만원 이상)
+                    min_trade_amount = settings.get('min_trade_amount', 50)  # 50만원
+                    if trade_amount >= min_trade_amount:
                         current_price = self.upbit_api.get_current_price(market)
                         price_change = self.market_analyzer.get_price_change(market)
                         
                         if current_price and price_change is not None:
-                            # 거래대금 정보 추가 (5분봉 거래대금)
-                            trade_amount = self._get_trade_amount(market)
-                            
-                            # 가격 급등/급락 필터링 (너무 큰 변동은 위험) - 동적 설정 사용
-                            price_threshold = settings['price_change_threshold']
-                            if abs(price_change) < price_threshold:
-                                spike_candidates.append({
+                            # 극단적 변동 제외 (-50% ~ +200%)
+                            if -50 <= price_change <= 200:
+                                high_volume_candidates.append({
                                     'market': market,
                                     'current_price': current_price,
                                     'price_change': price_change,
-                                    'volume_ratio': volume_threshold,
-                                    'trade_amount': trade_amount,  # 거래대금 추가
+                                    'trade_amount': trade_amount,
                                     'trade_amount_rank': 0  # 나중에 계산
                                 })
                                 
-                                # 거래량 급등 로그 (알림은 제거)
-                                logger.info(f"거래량 급등 감지: {market} ({volume_threshold:.1f}배, {price_change:+.2f}%)")
-                                
                 except Exception as e:
-                    logger.error(f"시장 스캔 오류 ({market}): {e}")
-                    # API 오류 시 잠시 대기
-                    time.sleep(2)
+                    logger.debug(f"거래대금 조회 실패 ({market}): {e}")
+                    time.sleep(0.5)
                     continue
             
-            if not spike_candidates:
-                logger.info("거래량 급등 종목 없음")
+            if not high_volume_candidates:
+                logger.info(f"최소 거래대금 {settings.get('min_trade_amount', 50)}만원 이상 종목 없음")
                 return
             
             # 거래대금 기준으로 정렬 및 랭킹 부여 (높은 순)
-            spike_candidates.sort(key=lambda x: x['trade_amount'], reverse=True)
-            for i, candidate in enumerate(spike_candidates):
+            high_volume_candidates.sort(key=lambda x: x['trade_amount'], reverse=True)
+            
+            # 상위 20개만 선별 (AI 분석 효율성)
+            high_volume_candidates = high_volume_candidates[:20]
+            
+            for i, candidate in enumerate(high_volume_candidates):
                 candidate['trade_amount_rank'] = i + 1
             
-            logger.info(f"거래량 급등 감지: {len(spike_candidates)}개 종목")
-            logger.info(f"거래대금 TOP3: " + 
+            logger.info(f"💰 거래대금 상위 {len(high_volume_candidates)}개 종목 선별 완료")
+            logger.info(f"거래대금 TOP5: " + 
                        ", ".join([f"{c['market'].replace('KRW-', '')}({c['trade_amount']:,.0f}만원)" 
-                                 for c in spike_candidates[:3]]))
+                                 for c in high_volume_candidates[:5]]))
             
-            # 거래대금 상위 종목 우선 고려 (상위 70% 가중치 적용)
-            top_candidates = spike_candidates[:max(1, int(len(spike_candidates) * 0.7))]
-            if len(top_candidates) < len(spike_candidates):
-                logger.info(f"거래대금 상위 {len(top_candidates)}개 종목 우선 분석")
+            # AI 수익률 분석을 위한 상위 종목들 선택
+            ai_candidates = high_volume_candidates[:5]  # 상위 5개 종목
+            logger.info(f"🤖 AI 수익률 분석 대상: {len(ai_candidates)}개 종목")
             
-            # AI 분석 (옵션) - 거래대금 상위 종목들을 우선 분석
-            best_candidate = spike_candidates[0]  # 기본값: 거래대금 1위 종목
+            # AI 분석 (수익률 중심) - 거래대금 상위 종목들을 수익률 관점에서 분석
+            best_candidate = high_volume_candidates[0]  # 기본값: 거래대금 1위 종목
             
-            if self.ai_analyzer and self.ai_analyzer.enabled and len(spike_candidates) > 1:
+            if self.ai_analyzer and self.ai_analyzer.enabled and len(high_volume_candidates) > 1:
                 try:
-                    # 거래대금 상위 종목들을 AI에 전달 (최대 5개)
-                    ai_candidates = top_candidates[:5]
-                    ai_result = self.ai_analyzer.analyze_market_condition(ai_candidates)
+                    # 수익률 중심 AI 분석 실행
+                    ai_result = self.ai_analyzer.analyze_profit_potential(ai_candidates)
                     
                     confidence_threshold = settings['ai_confidence_threshold']
                     if (ai_result.get('recommended_coin') and 
@@ -1256,24 +1458,24 @@ class CoinButler:
                         
                         # AI 추천 종목 찾기
                         recommended_market = f"KRW-{ai_result['recommended_coin']}"
-                        for candidate in spike_candidates:
+                        for candidate in high_volume_candidates:
                             if candidate['market'] == recommended_market:
                                 best_candidate = candidate
                                 # AI 추천 ID를 candidate에 추가 (성과 추적용)
                                 best_candidate['recommendation_id'] = ai_result.get('recommendation_id')
-                                logger.info(f"AI 추천 종목 선택: {recommended_market} (신뢰도: {ai_result['confidence']})")
+                                logger.info(f"🎯 AI 추천 종목: {recommended_market} (신뢰도: {ai_result['confidence']}, 예상수익: {ai_result.get('expected_profit', 'N/A')}%)")
                                 break
                         else:
-                            logger.info(f"AI 추천 종목({recommended_market})이 후보에 없어서 첫 번째 후보 선택")
+                            logger.info(f"AI 추천 종목({recommended_market})이 후보에 없어서 거래대금 1위 선택")
                     else:
-                        logger.info(f"AI 분석 결과 신뢰도 부족 또는 고위험 - 첫 번째 후보 선택")
+                        logger.info(f"AI 분석 결과 신뢰도 부족 또는 고위험 - 거래대금 1위 선택")
                         
                 except Exception as e:
-                    logger.error(f"AI 분석 중 오류: {e}")
-                    logger.info("AI 분석 실패로 첫 번째 후보 선택")
+                    logger.error(f"AI 수익률 분석 중 오류: {e}")
+                    logger.info("AI 분석 실패로 거래대금 1위 선택")
             else:
                 if not self.ai_analyzer or not self.ai_analyzer.enabled:
-                    logger.info("AI 분석 비활성화 - 첫 번째 후보 선택")
+                    logger.info("AI 분석 비활성화 - 거래대금 1위 선택")
                 else:
                     logger.info("후보가 1개뿐이어서 AI 분석 건너뜀")
             
