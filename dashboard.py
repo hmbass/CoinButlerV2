@@ -8,6 +8,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import time
 import os
+import logging
 from dotenv import load_dotenv
 
 from trade_bot import get_bot
@@ -18,6 +19,15 @@ from config_manager import get_config_manager
 
 # 환경변수 로드
 load_dotenv()
+
+# 로거 설정
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 # 페이지 설정
 st.set_page_config(
@@ -289,7 +299,6 @@ def _sync_with_upbit(actual_upbit_balances: dict) -> bool:
     """실제 업비트 잔고를 기준으로 positions.json 동기화"""
     try:
         import json
-        from datetime import datetime
         
         logger.info("🔄 업비트 잔고와 동기화 시작...")
         
@@ -364,9 +373,6 @@ def _sync_with_upbit(actual_upbit_balances: dict) -> bool:
 def _record_manual_sync(upbit_balances: dict, synced_positions: dict):
     """수동 동기화 기록을 trade_history.csv에 추가"""
     try:
-        import pandas as pd
-        from datetime import datetime
-        
         sync_records = []
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
